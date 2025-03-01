@@ -508,7 +508,7 @@ class FeffResultsFrame(wx.Frame):
         dlg.Destroy()
         if remove:
             for checked in self.fefflist.GetCheckedStrings():
-                shutil.rmtree(unixpath(Pathn(self.feff_folder, checked)))
+                shutil.rmtree(unixpath(Path(self.feff_folder, checked)))
             self.onSearch()
 
     def onFeffFolder(self, event=None):
