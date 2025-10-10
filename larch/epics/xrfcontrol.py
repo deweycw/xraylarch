@@ -27,7 +27,7 @@ from wxutils import (SimpleText, EditableListBox, Font, FloatCtrl,
 
 import larch
 from larch.site_config import icondir
-from larch.wxlib import PeriodicTablePanel, LarchWxApp
+from larch.wxlib import PeriodicTablePanel, LarchWxApp, GUI_COLORS
 from larch.wxlib.xrfdisplay import (XRFDisplayFrame, XRFCalibrationFrame,
                                     FILE_WILDCARDS)
 from larch.utils import get_cwd
@@ -38,6 +38,14 @@ try:
     from .xrf_detectors import Epics_MultiXMAP, Epics_Xspress3
 except:
     pass
+
+def warning_color(val, warn, error):
+    tcolor = GUI_COLORS.text
+    if val > warn:
+        tcolor = GUI_COLORS.orangered4
+    if val > error:
+        tcolor = GUI_COLORS.text_invalid
+    return tcolor
 
 class DetectorSelectDialog(wx.Dialog):
     """Connect to an Epics MCA detector
@@ -253,10 +261,11 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
             i = self.wids['roilist'].GetStrings().index(roiname)
             self.wids['roilist'].EnsureVisible(i)
             self.onROI(label=roiname)
-        deadtime = self.det.get_deadtime(mca=self.det_fore)
-        if deadtime is not None:
-            self.wids['deadtime'].SetLabel("%.1f" % deadtime)
-        self.SetTitle("%s: %s" % (self.main_title, title))
+        dtime = self.det.get_deadtime(mca=self.det_fore)
+        if dtime is not None:
+            self.wids['deadtime'].SetLabel(f"{dtime:.1f}")
+        self.wids['deadtime'].SetForegroundColour(warning_color(dtime, 25, 50))
+        self.SetTitle(f"{self.main_title}: {title}")
         self.needs_newplot = False
 
     def onSaveROIs(self, event=None, **kws):
@@ -402,6 +411,29 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
                                       action=self.onMcaSumChoice,
                                       default=1 )
 
+        roipanel = wx.Panel(pane)
+        roisizer = wx.GridBagSizer(3, 3)
+        rlabel = SimpleText(roipanel, 'Count Rates (Hz)',  style=LEFT, size=(150, -1))
+        tlabel = SimpleText(roipanel, 'Output Count Rate',  style=LEFT, size=(150, -1))
+        self.wids['roi_name'] = SimpleText(roipanel, '[ROI]', style=LEFT, size=(150, -1))
+
+        roisizer.Add(rlabel,                 (0, 0), (1, 1), LEFT, 1)
+        roisizer.Add(tlabel,                 (1, 0), (1, 1), LEFT, 1)
+        roisizer.Add(self.wids['roi_name'],  (2, 0), (1, 1), LEFT, 1)
+
+        opts = {'style': RIGHT, 'size': (100, -1)}
+        for i in range(1, self.nmca+1):
+            l = SimpleText(roipanel, f'MCA {i}', **opts)
+            self.wids[f'ocr{i}'] = o = SimpleText(roipanel, ' ', **opts)
+            self.wids[f'roi{i}'] = r = SimpleText(roipanel, ' ', **opts)
+            o.SetBackgroundColour((220,220,220))
+            r.SetBackgroundColour((220,220,220))
+
+            roisizer.Add(l,  (0, i), (1, 1), style, 1)
+            roisizer.Add(o,  (1, i), (1, 1), style, 1)
+            roisizer.Add(r,  (2, i), (1, 1), style, 1)
+        pack(roipanel, roisizer)
+
         b1 =  Button(pane, 'Start',      size=(90, -1), action=self.onStart)
         b2 =  Button(pane, 'Stop',       size=(90, -1), action=self.onStop)
         b3 =  Button(pane, 'Erase',      size=(90, -1), action=self.onErase)
@@ -415,9 +447,9 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
         sta_lab = SimpleText(pane, 'Status :',          size=(100, -1))
         dea_lab = SimpleText(pane, '% Deadtime:',       size=(100, -1))
 
-        psizer = wx.GridBagSizer(5, 5)
+        psizer = wx.GridBagSizer(3, 3)
         psizer.Add(SimpleText(pane, ' MCAs: '),  (0, 0), (1, 1), style, 1)
-        psizer.Add(det_btnpanel,           (0, 1), (2, 1), style, 1)
+        psizer.Add(det_btnpanel,           (0, 1), (3, 1), style, 1)
         psizer.Add(bkg_lab,                (0, 2), (1, 1), style, 1)
         psizer.Add(self.wids['bkg_det'],   (0, 3), (1, 1), style, 1)
         psizer.Add(sum_lab,                (1, 2), (1, 1), style, 1)
@@ -436,6 +468,8 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
         psizer.Add(self.wids['det_status'],  (0, 9), (1, 1), style, 1)
         psizer.Add(dea_lab,                  (1, 8), (1, 1), style, 1)
         psizer.Add(self.wids['deadtime'],    (1, 9), (1, 1), style, 1)
+        psizer.Add(roipanel,                 (2, 2), (1, 8), style, 1)
+
         pack(pane, psizer)
         # pane.SetMinSize((500, 53))
         self.det.connect_displays(status=self.wids['det_status'],
@@ -454,7 +488,6 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
             self.show_mca()
         # self.elapsed_real = self.det.elapsed_real
         self.mca.real_time = self.det.elapsed_real
-        # print("Update Data  ", force, self.det.needs_refresh)
 
         if force or self.det.needs_refresh:
             self.det.needs_refresh = False
@@ -474,8 +507,8 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
 
             dtime = self.det.get_deadtime(mca=self.det_fore)
             if dtime is not None:
-                self.wids['deadtime'].SetLabel("%.1f" % dtime)
-
+                self.wids['deadtime'].SetLabel(f"{dtime:.1f}")
+            self.wids['deadtime'].SetForegroundColour(warning_color(dtime, 25, 50))
             counts = self.det.get_array(mca=self.det_fore)*1.0
             energy = self.det.get_energy(mca=self.det_fore)
             if max(counts) < 1.0:
@@ -486,7 +519,6 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
     def ShowROIStatus(self, left, right, name='', panel=0):
         if left > right:
             return
-        sum = self.ydata[left:right].sum()
 
         try:
             ftime, nframes = self.det.get_frametime()
@@ -495,23 +527,34 @@ class EpicsXRFDisplayFrame(XRFDisplayFrame):
             nframes = self.det.nframes
         self.det.elapsed_real = nframes * ftime
 
+        rfmt = "mca{}: {:8,.0f}"
+
         mca_counts = self.det.mcas[self.det_fore-1].get('VAL')
         sum =  mca_counts[left:right].sum()
-        # print("ROI STATUS ", name, ftime, nframes, sum, cps, mca_counts.sum(),  mca_counts)
+        thissum = 0
+        thisrate = 0
+
         if name in (None, ''):
-            name = 'Selected'
+            name = 'selected'
         else:
-            for roi in self.det.mcas[self.det_fore-1].rois:
-                if name.lower() == roi.name.lower():
-                    try:
-                        sum = roi.sum
-                    except:
-                        pass
-        cps = sum/ftime
-        if cps < 0: cps = 0
-        # print("ROI STATUS ", name, _counts, cps)
-        fmt = " {:s}: Cts={:10,.0f} :{:10,.1f} Hz"
-        self.write_message(fmt.format(name, sum, cps), panel=panel)
+            lname = name.lower()
+            for nmca in range(1, self.nmca+1):
+                counts = self.det.mcas[nmca-1].get('VAL')
+                total = counts.sum()/ftime
+                sum = counts[left:right].sum()
+                rate = sum/ftime
+                self.wids[f'ocr{nmca}'].SetLabel(f'{total:,.0f}')
+                self.wids[f'ocr{nmca}'].SetForegroundColour(warning_color(total, 1.25e6, 2.5e6))
+
+                self.wids[f'roi{nmca}'].SetLabel(f'{rate:,.0f}')
+                self.wids[f'roi{nmca}'].SetForegroundColour(warning_color(rate, 4.0e5, 8.0e5))
+                if self.det_fore == nmca:
+                    thissum, thisrate = sum, rate
+        mfmt = " {:s}: Cts={:10,.0f} :{:10,.1f} Hz"
+        self.write_message(mfmt.format(name, thissum, thisrate), panel=panel)
+        cname = self.wids['roi_name'].GetLabel().strip()
+        if name != cname:
+            self.wids['roi_name'].SetLabel(name)
 
     def onSelectDet(self, event=None, index=0, init=False, **kws):
         if index > 0:
@@ -663,6 +706,7 @@ class EpicsXRFApp(LarchWxApp):
                                      output_title=self.output_title,
                                      _larch=self._larch)
         frame.Show()
+        frame.Raise()
         self.SetTopWindow(frame)
         return True
 

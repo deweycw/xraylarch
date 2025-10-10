@@ -6,8 +6,8 @@ import numpy as np
 
 from lmfit import Parameters, Minimizer, report_fit
 from xraydb import guess_edge
-from larch import Group, Make_CallArgs, parse_group_args
-
+from larch import Group
+from larch.larchlib import Make_CallArgs, parse_group_args
 from larch.math import (index_of, index_nearest, interp, smooth,
                         polyfit, remove_dups, remove_nans, remove_nans2)
 from .xafsutils import set_xafsGroup, TINY_ENERGY
@@ -60,6 +60,36 @@ def find_e0(energy, mu=None, group=None, _larch=None):
         group = set_xafsGroup(group, _larch=_larch)
         group.e0 = e0
     return e0
+
+@Make_CallArgs(["energy","mu"])
+def find_e0_calc(energy, mu=None, group=None, **kws):
+    """find E0 for a spectrum from a calcution like FEFF or FDMNES,
+     which usually have a very small pre-edge section, but will
+     have robustly non-repeating energy values and low-noise
+
+    E0 is found as the point with maximum derivative with some checks to avoid spurious glitches.
+
+    Arguments:
+        energy (ndarray or group): array of x-ray energies, in eV, or group
+        mu     (ndaarray or None): array of mu(E) values
+        group  (group or None):    output group
+        kws    (ignored)
+
+    Returns:
+        float: Value of e0. If a group is provided, group.e0 will also be set.
+
+    Notes:
+        1. Supports :ref:`First Argument Group` convention, requiring group members `energy` and `mu`
+    """
+    energy, mu, group = parse_group_args(energy, members=('energy', 'mu'),
+                                         defaults=(mu,), group=group,
+                                         fcn_name='find_e0')
+    energy, mu = remove_nans2(energy, mu)
+    # first find e0 without smoothing, then refine with smoothing
+    dmude = np.gradient(mu)/np.gradient(energy)
+    imax = np.where(dmude > 0.99*dmude.max())[0]
+    return energy[imax]
+
 
 def find_energy_step(energy, frac_ignore=0.01, nave=10):
     """robustly find energy step in XAS energy array,
@@ -124,7 +154,7 @@ def flat_resid(pars, en, mu):
     return pars['c0'] + en * (pars['c1'] + en * pars['c2']) - mu
 
 def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=None,
-            pre2=None, norm1=None, norm2=None):
+            pre2=None, norm1=None, norm2=None, iscalc=False):
     """pre edge subtraction, normalization for XAFS (straight python)
 
     This performs a number of steps:
@@ -148,6 +178,8 @@ def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=No
     norm2:   high E range (relative to E0) for post-edge fit
     nnorm:   degree of polynomial (ie, nnorm+1 coefficients will be found) for
              post-edge normalization curve. Default=None -- see note.
+    iscalc   whether to treat spectrum as calculation.
+
     Returns
     -------
       dictionary with elements (among others)
@@ -179,9 +211,13 @@ def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=No
     if energy.size <= 1:
         raise ValueError("energy array must have at least 2 points")
     if e0 is None or e0 < energy[1] or e0 > energy[-2]:
-        e0 = find_e0(energy, mu)
+        if iscalc:
+            e0 = find_e0_calc(energy, mu)
+        else:
+            e0 = find_e0(energy, mu)
+
     ie0 = index_nearest(energy, e0)
-    e0 = energy[ie0]
+    e0 = float(energy[ie0])
 
     if pre1 is None:
         # skip first energy point, often bad
@@ -194,32 +230,44 @@ def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=No
         pre2 = 0.5*pre1
     if pre1 > pre2:
         pre1, pre2 = pre2, pre1
+    if iscalc:
+        pre1 = pre2 = energy[0] - e0
+        ipre1 = ipre2 = 0
+
     ipre1 = index_of(energy-e0, pre1)
     ipre2 = index_of(energy-e0, pre2)
-    if npre==1 and ipre2 < ipre1 + 2 + nvict:
-        pre2 = (energy-e0)[int(ipre1 + 2 + nvict)]
+    if (ipre2 - ipre1) < 3:
+        nvict = 0
+        npre = 0
 
     if norm2 is None:
         norm2 = 5.0*round((max(energy) - e0)/5.0)
     if norm2 < 0:
         norm2 = max(energy) - e0 - norm2
     norm2 = min(norm2, (max(energy) - e0))
+
     if norm1 is None:
         norm1 = min(25, 5.0*round(norm2/15.0))
 
     if norm1 > norm2:
         norm1, norm2 = norm2, norm1
 
-    norm1 = min(norm1, norm2 - 10)
+    norm1 = min(norm1, norm2 - 2)
+
     if nnorm is None:
         nnorm = 2
         if norm2-norm1 < 300: nnorm = 1
         if norm2-norm1 <  30: nnorm = 0
+
     nnorm = max(min(nnorm, MAX_NNORM), 0)
     # preedge
     p1 = index_of(energy, pre1+e0)
     p2 = index_nearest(energy, pre2+e0)
-    if npre == 0:
+    if iscalc:
+        pre_edge = mu[0] * np.ones(len(energy))
+        precoefs = [mu[0], 0.0]
+        npre = 0
+    elif npre == 0:
         if p2 == p1:
             p2 = p2 + 1
         mu_mean = mu[p1:p2].mean()
@@ -240,10 +288,13 @@ def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=No
     # normalization
     p1 = index_of(energy, norm1+e0)
     p2 = index_nearest(energy, norm2+e0)
+    if p1 > len(energy)-3:
+        p1 = len(energy)-3
     if p2-p1 < 2:
-        p2 = min(len(energy), p1 + 2)
-    if p2-p1 < 2:
-        p1 = p1-2
+        p1 = p1 - 2
+        nnorm = 0
+    elif p2-p1 < 5:
+        nnorm = min(1, nnorm)
 
     presub = (mu-pre_edge)[p1:p2]
     coefs = polyfit(energy[p1:p2], presub, nnorm)
@@ -257,16 +308,16 @@ def preedge(energy, mu, e0=None, step=None, nnorm=None, nvict=0, npre=1, pre1=No
         edge_step = post_edge[ie0] - pre_edge[ie0]
     edge_step = max(1.e-12, abs(float(edge_step)))
     norm = (mu - pre_edge)/edge_step
-    return {'e0': e0, 'edge_step': edge_step, 'norm': norm,
+    return {'e0': float(e0), 'edge_step': float(edge_step), 'norm': norm,
             'pre_edge': pre_edge, 'post_edge': post_edge,
             'norm_coefs': norm_coefs, 'nvict': nvict,
-            'nnorm': nnorm, 'norm1': norm1, 'norm2': norm2,
-            'pre1': pre1, 'pre2': pre2, 'precoefs': precoefs}
+            'nnorm': nnorm, 'norm1': float(norm1), 'norm2': float(norm2),
+            'pre1': float(pre1), 'pre2': float(pre2), 'precoefs': precoefs}
 
 @Make_CallArgs(["energy","mu"])
 def pre_edge(energy, mu=None, group=None, e0=None, step=None, nnorm=None,
              nvict=0, npre=1, pre1=None, pre2=None, norm1=None, norm2=None,
-             make_flat=True, _larch=None):
+             make_flat=True, iscalc=False, _larch=None):
     """pre edge subtraction, normalization for XAFS
 
     This performs a number of steps:
@@ -292,6 +343,7 @@ def pre_edge(energy, mu=None, group=None, e0=None, step=None, nnorm=None,
     nnorm:   degree of polynomial (ie, nnorm+1 coefficients will be found) for
              post-edge normalization curve. See Notes.
     make_flat: boolean (Default True) to calculate flattened output.
+    iscalc:  is a calculated spectrum, with very limited pre-edge
 
     Returns
     -------
@@ -345,9 +397,10 @@ def pre_edge(energy, mu=None, group=None, e0=None, step=None, nnorm=None,
 
     if group is not None and e0 is None:
         e0 = getattr(group, 'e0', None)
+
     pre_dat = preedge(energy, mu, e0=e0, step=step, nnorm=nnorm,
                       nvict=nvict, npre=npre, pre1=pre1, pre2=pre2,
-                      norm1=norm1, norm2=norm2)
+                      norm1=norm1, norm2=norm2, iscalc=iscalc)
     group = set_xafsGroup(group, _larch=_larch)
 
     e0    = pre_dat['e0']

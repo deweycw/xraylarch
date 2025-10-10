@@ -16,7 +16,7 @@ import numpy as np
 from numpy.random import randint
 from pyshortcuts import bytes2str, str2bytes, fix_varname
 
-from larch import Group, repr_value
+from larch.symboltable import Group, repr_value
 from larch import __version__ as larch_version
 from larch.utils import asfloat, unixpath
 from larch.math import remove_dups
@@ -367,7 +367,7 @@ def parse_perlathena(text, filename):
         elif key in ('1;', 'indicator', 'lcf_data', 'plot_features'):
             pass
         else:
-            print(" do not know what to do with key '%s' at '%s'" % (key, raw['name']))
+            print(f" ignoring Athena Entry for '{key}'")
 
     out = Group()
     out.__doc__ = """XAFS Data from Athena Project File %s""" % (filename)

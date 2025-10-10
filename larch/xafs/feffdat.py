@@ -21,15 +21,17 @@ from lmfit import Parameters, Parameter
 from xraydb import atomic_mass, atomic_symbol
 from pyshortcuts import fix_varname
 
-from larch import Group, isNamedClass
+from larch.symboltable import Group
+from larch.larchlib import isNamedClass
 from larch.utils.strutils import b32hash
 from larch.fitting import group2params, dict2params, isParameter, param_value
-from .xafsutils import ETOK, ktoe, set_xafsGroup, gfmt
+from .xafsutils import ETOK, ktoe, set_xafsGroup, gfmt, gformat
 from .sigma2_models import add_sigma2funcs
 
 SMALL_ENERGY = 1.e-6
 
-PATH_PARS = ('degen', 's02', 'e0', 'ei', 'deltar', 'sigma2', 'third', 'fourth')
+PATH_PARS = ('s02', 'e0', 'deltar', 'sigma2', 'third', 'fourth', 'ei')
+PATH_PARS_WITH_R = ('s02', 'e0', 'r', 'deltar', 'sigma2', 'third', 'fourth', 'ei')
 FDAT_ARRS = ('real_phc', 'mag_feff', 'pha_feff', 'red_fact',
              'lam', 'rep', 'pha', 'amp', 'k')
 
@@ -41,6 +43,8 @@ class FeffDatFile(Group):
     def __init__(self, filename=None,  **kws):
         kwargs = dict(name='feff.dat: %s' % filename)
         kwargs.update(kws)
+        self.__rmass = None
+        self.__geometry = None
         Group.__init__(self,  **kwargs)
         if filename not in ('', None) and Path(filename).exists():
             self._read(filename)
@@ -79,10 +83,46 @@ class FeffDatFile(Group):
         return self.__rmass
 
     @rmass.setter
-    def rmass(self, val):  pass
+    def rmass(self, val):
+        pass
+
+    @property
+    def geometry(self):
+        """path geometry -- more complete than 'geom', closing matching `geometry`
+           from feffutils and get_feff_pathinfo, except without 'eta'
+        """
+        if not hasattr(self, '_geometry'):
+            self.__geometry = None
+        if self.__geometry is None:
+            self.__geometry = []
+            pts, atoms = [], []
+            for atsym, iz, ipot, amass, x, y, z in self.geom:
+                pts.append(np.array([float(x), float(y), float(z)]))
+                atoms.append([atsym, ipot, float(x), float(y), float(z)])
+            pts.append(pts[0])
+            pts.append(pts[1])
+            atoms.append(atoms[0])
+            atoms.append(atoms[1])
+
+        for i in range(1, len(pts)-1):
+            p0 = pts[i-1]
+            p1 = pts[i+0]
+            p2 = pts[i+1]
+            a = p1 - p0
+            b = p2 - p1
+            dist = float(np.linalg.norm(pts[i]-pts[i-1]))
+            beta = float(np.acos(np.dot(a, b) / np.sqrt((np.dot(a, a) * np.dot(b, b))))*180/np.pi)
+            sym, ipot, x, y, z = atoms[i]
+            self.__geometry.append((sym, ipot, dist, x, y, z, beta, 0.0))
+        return self.__geometry
+
+    @geometry.setter
+    def geometry(self, val):
+        pass
 
     def _set_from_dict(self, **kws):
         self.__rmass = None
+        self.__geometry = None
         for key, val in kws.items():
             if key  == 'rmass':
                 continue
@@ -184,7 +224,7 @@ class FeffDatFile(Group):
                     self.degen, self.__reff__, self.rnorman, self.edge = w
                 elif pcounter > 2:
                     words = line.split()
-                    xyz = ["%7.4f" % float(x) for x in words[:3]]
+                    xyz = ["%8.5f" % float(x) for x in words[:3]]
                     ipot = int(words[3])
                     iz   = int(words[4])
                     if len(words) > 5:
@@ -211,7 +251,7 @@ class FeffDatFile(Group):
         self.pha = data[1] + data[3]
         self.amp = data[2] * data[4]
         self.__rmass = None  # reduced mass of path
-
+        self.__geometry = None  # path geometry list [atom, dist, angle]
 
 class FeffPathGroup(Group):
     def __init__(self, filename=None, label='', feffrun='', s02=None, degen=None,
@@ -231,8 +271,8 @@ class FeffPathGroup(Group):
         self.shell = 'K'
         self.absorber = None
         self._feffdat = _feffdat
-        self.dataset = 'd001'
-        self.hashkey = 'p001'
+        self.dataset = None
+        self.hashkey = None
         self.k = None
         self.chi = None
 
@@ -339,7 +379,6 @@ class FeffPathGroup(Group):
         newpath.__setstate__(self.__getstate__())
         return newpath
 
-
     @property
     def reff(self): return self._feffdat.reff
 
@@ -358,8 +397,17 @@ class FeffPathGroup(Group):
     @rmass.setter
     def rmass(self, val):  pass
 
+
+    @property
+    def geometry(self):
+        return self._feffdat.geometry
+
+    @geometry.setter
+    def geometry(self, val):
+        pass
+
     def __repr__(self):
-        return f'<FeffPath Group label={self.label:s}, filename={self.filename:s}, use={self.use}>'
+        return f'<FeffPath Group label={self.label:s}, filename={self.filename}, use={self.use}>'
 
     def create_path_params(self, params=None, dataset=None):
         """
@@ -437,22 +485,82 @@ class FeffPathGroup(Group):
         return out
 
     def path_paramvals(self, **kws):
-        (deg, s02, e0, ei, delr, ss2, c3, c4) = self.__path_params()
-        return dict(degen=deg, s02=s02, e0=e0, ei=ei, deltar=delr,
-                    sigma2=ss2, third=c3, fourth=c4)
+        (s02, e0, delr, ss2, c3, c4, ei) = self.__path_params()
+        return dict(s02=s02, e0=e0, deltar=delr,
+                    sigma2=ss2, third=c3, fourth=c4, ei=ei)
 
-    def report(self):
-        "return  text report of parameters"
+    def dict_report(self):
+        """report as a dict"""
         tmpvals = self.__path_params()
         pathpars = {}
-        for pname in ('degen', 's02', 'e0', 'deltar',
-                      'sigma2', 'third', 'fourth', 'ei'):
+        for pname in PATH_PARS:
             parname = self.pathpar_name(pname)
             if parname in self.params:
                 pathpars[pname] = (self.params[parname].value,
                                    self.params[parname].stderr)
 
-        out = [f" = Path '{self.label}' = {self.absorber} {self.shell} Edge",
+        out = {'filename': self.filename,
+                 'label': self.label,
+                 'absorber': self.absorber,
+                 'shell': self.shell,
+                 'nleg': f'{self.nleg}',
+                 'degen': f'{self.degen}',
+                 'reff': f'{self.reff:.6f}'}
+
+        geom = []
+        gshort = []
+        geomformat = '%s(ipot=%d): %s, %s, %s'
+        for atsym, iz, ipot, amass, x, y, z in self.geom:
+            geom.append(geomformat % (atsym, ipot, x, y, z))
+            gshort.append(f'{atsym}({ipot})')
+        out['geometry'] = '\n'.join(geom)
+        out['geom'] = '-'.join(gshort)
+
+        def sfmt(x): return gformat(x, length=8)
+
+        for pname in PATH_PARS_WITH_R:
+            val = strval = getattr(self, pname, 0)
+            parname = self.pathpar_name(pname)
+            std, expr = None, None
+            if pname == 'r':
+                parname = self.pathpar_name('deltar')
+                par = self.params.get(parname, None)
+                val = par.value + self._feffdat.reff
+                strval = 'reff + ' + getattr(self, 'deltar', 0)
+                std = par.stderr
+            else:
+                if pname in pathpars:
+                    val, std = pathpars[pname]
+                else:
+                    par = self.params.get(parname, None)
+                    if par is not None:
+                        val = par.value
+                        std = par.stderr
+            if std is None  or std <= 0:
+                svalue = sfmt(val)
+                std = 0.0
+            else:
+                svalue = f"{sfmt(val)}({sfmt(std).strip()})"
+            out[pname] = svalue
+            out[pname+'_value'] = sfmt(val)
+            if abs(std) <  1.e-9:
+                out[pname+'_stderr'] = '0.0'
+            else:
+                out[pname+'_stderr'] = sfmt(std)
+            out[pname+'_expr'] = strval
+        return out
+
+    def report(self):
+        "return  text report of parameters"
+        tmpvals = self.__path_params()
+        pathpars = {}
+        for pname in PATH_PARS:
+            parname = self.pathpar_name(pname)
+            if parname in self.params:
+                pathpars[pname] = (self.params[parname].value,
+                                   self.params[parname].stderr)
+
+        out = [f" = Path '{self.label}' {self.absorber} {self.shell} Edge",
                f"    feffdat file = {self.filename}, from feff run '{self.feffrun}'"]
         geomlabel  = '    geometry  atom      x        y        z      ipot'
         geomformat = '            %4s      %s, %s, %s  %d'
@@ -467,8 +575,10 @@ class FeffPathGroup(Group):
         out.append('     {:7s}= {:s}'.format('reff',
                                               gfmt(self._feffdat.reff)))
 
-        for pname in ('degen', 's02', 'e0', 'r',
-                      'deltar', 'sigma2', 'third', 'fourth', 'ei'):
+        out.append('     {:7s}= {:s}'.format('degen',
+                                              gfmt(self._feffdat.degen)))
+
+        for pname in PATH_PARS_WITH_R:
             val = strval = getattr(self, pname, 0)
             parname = self.pathpar_name(pname)
             std = None
@@ -534,10 +644,9 @@ class FeffPathGroup(Group):
             return
         reff = fdat.reff
         # get values for all the path parameters
-        (degen, s02, e0, ei, deltar, sigma2, third, fourth)  = \
-                self.__path_params(degen=degen, s02=s02, e0=e0, ei=ei,
-                                   deltar=deltar, sigma2=sigma2,
-                                   third=third, fourth=fourth)
+        (s02, e0, deltar, sigma2, third, fourth, ei)  = \
+          self.__path_params(s02=s02, e0=e0, deltar=deltar,
+                            sigma2=sigma2, third=third, fourth=fourth, ei=ei)
 
         # create e0-shifted energy and k, careful to look for |e0| ~= 0.
         en = k*k - e0*ETOK
@@ -577,7 +686,7 @@ class FeffPathGroup(Group):
                       1j*(2*q*reff + pha +
                           2*p*(deltar - 2*sigma2/reff - 2*pp*third/3) ))
 
-        cchi = degen * s02 * amp * cchi / (q*(reff + deltar)**2)
+        cchi = self.degen * s02 * amp * cchi / (q*(reff + deltar)**2)
         cchi[0] = 2*cchi[1] - cchi[2]
         # outputs:
         self.k = k

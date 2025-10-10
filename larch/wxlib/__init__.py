@@ -28,8 +28,8 @@ except (ImportError, AttributeError):
 _larch_name = '_sys.wx'
 _larch_builtins = {}
 
-FONTSIZE = 10
-FONTSIZE_FW = 10
+FONTSIZE = 8
+FONTSIZE_FW = 8
 if uname == 'win':
     FONTSIZE = 10
     FONTSIZE_FW = 11
@@ -37,6 +37,37 @@ if uname == 'win':
 elif uname == 'darwin':
     FONTSIZE = 11
     FONTSIZE_FW = 12
+
+def fontsize(fixed_width=False):
+    """return best default fontsize"""
+    font = wx.SystemSettings.GetFont(wx.SYS_DEFAULT_GUI_FONT)
+    if uname not in ('win', 'darwin'):
+        font = font.Smaller()
+    elif fixed_width:
+        font = font.Larger()
+    return int(font.GetFractionalPointSize())
+
+
+def Font(size, serif=False, fixed_width=False):
+    """define a font by size and serif/ non-serif
+    f = Font(10, serif=True)
+    """
+    family = wx.DEFAULT
+    if not serif:
+        family = wx.SWISS
+    if fixed_width:
+        family = wx.MODERN
+    return wx.Font(size, family, wx.NORMAL, wx.BOLD, 0, "")
+
+def get_font(larger=0, smaller=0, serif=False, fixed_width=False):
+    "return a font"
+    fnt = Font(fontsize(fixed_width=fixed_width),
+               serif=serif, fixed_width=fixed_width)
+    for i in range(larger):
+        fnt = fnt.Larger()
+    for i in range(smaller):
+        fnt = fnt.Smaller()
+    return fnt
 
 
 def DarwinHLine(parent, size=(700, 3)):
@@ -48,87 +79,77 @@ def DarwinHLine(parent, size=(700, 3)):
     line.SetBackgroundColour((196,196,196))
     return line
 
+DARK_THEME = False
+try:
+    import darkdetect
+    DARK_THEME = darkdetect.isDark()
+except ImportError:
+    DARK_THEME = False
+
+def nullfunc(*args, **kws):
+    pass
+
+_larch_builtins = {'_sys.wx': dict(gcd=nullfunc,
+                                   databrowser=nullfunc,
+                                   fileprompt=nullfunc,
+                                   wx_update=nullfunc)}
+
+_larch_builtins['_plotter'] = dict(plot=nullfunc,
+                                   oplot=nullfunc,
+                                   newplot=nullfunc,
+                                   plot_text=nullfunc,
+                                   plot_marker=nullfunc,
+                                   plot_arrow=nullfunc,
+                                   plot_setlimits=nullfunc,
+                                   plot_axvline=nullfunc,
+                                   plot_axhline=nullfunc,
+                                   scatterplot=nullfunc,
+                                   hist=nullfunc,
+                                   update_trace=nullfunc,
+                                   save_plot=nullfunc,
+                                   save_image=nullfunc,
+                                   get_display=nullfunc,
+                                   close_all_displays=nullfunc,
+                                   get_cursor=nullfunc,
+                                   last_cursor_pos=nullfunc,
+                                   imshow=nullfunc,
+                                   contour=nullfunc,
+                                   xrf_plot=nullfunc,
+                                   xrf_oplot=nullfunc,
+                                   fit_plot=nullfunc)
 
 if HAS_WXPYTHON:
+    from wxutils import (set_sizer, pack, SetTip, HLine, Check,
+                         MenuItem, Popup, RIGHT, LEFT, CEN , LTEXT,
+                         FRAMESTYLE, hms, DateTimeCtrl, Button,
+                         TextCtrl, ToggleButton, BitmapButton, Choice,
+                         YesNo, SimpleText, LabeledTextCtrl,
+                         HyperText, get_icon, OkCancel,
+                         SavedParameterDialog, GridPanel, RowPanel,
+                         make_steps, set_float, FloatCtrl,
+                         EditableListBox,
+                         FileDropTarget, NumericCombo, FloatSpin,
+                         FileOpen, FileSave, SelectWorkdir,
+                         FloatSpinWithPin, flatnotebook,
+                         PeriodicTablePanel, gcd, ExceptionPopup,
+                         show_wxsizes, panel_pack)
+
+    from .filechecklist import FileCheckList
+    from .wxcolors import COLORS, GUIColors, GUI_COLORS, set_color
     from . import larchframe
     from . import larchfilling
     from . import readlinetextctrl
-    import wxutils as wxu
-    from wxutils import (set_sizer, pack, SetTip, Font, HLine, Check, MenuItem,
-                         Popup, RIGHT, LEFT, CEN , LTEXT, FRAMESTYLE, hms,
-                         DateTimeCtrl, Button, TextCtrl, ToggleButton,
-                         BitmapButton, Choice, YesNo, SimpleText,
-                         LabeledTextCtrl, HyperText, get_icon, OkCancel,
-                         SavedParameterDialog, GridPanel,
-                         RowPanel, make_steps, set_float, FloatCtrl,
-                         EditableListBox, COLORS, GUIColors, set_color,
-                         FileCheckList, FileDropTarget, NumericCombo,
-                         FloatSpin, FloatSpinWithPin, flatnotebook,
-                         PeriodicTablePanel, gcd, ExceptionPopup, show_wxsizes,
-                         panel_pack)
-
-    def FileOpenX(parent, message, default_file='', default_dir=None, **kws):
-        "File Open dialog wrapper."
-        if default_file is None:
-            default_file = ''
-        if default_dir is None:
-            default_dir = Path('.').absolute().as_posix()
-        result = wxu.FileOpen(parent, message, default_dir=default_dir,
-                                  default_file=default_file, **kws)
-        if result is None:
-            return
-        return Path(result).absolute().as_posix()
-
-
-    def FileOpen(parent, message, default_dir=None, default_file='',
-                    multiple=False, wildcard=None):
-        """File Open dialog wrapper.
-        returns full path on OK or None on Cancel
-        """
-        out = None
-        if default_file is None:
-            default_file = ''
-        if default_dir is None:
-            default_dir = Path('.').absolute().as_posix()
-        if wildcard is None:
-            wildcard = 'All files (*.*)|*.*'
-        style = wx.FD_OPEN|wx.FD_CHANGE_DIR
-        if multiple:
-            style = style|wx.FD_MULTIPLE
-        dlg = wx.FileDialog(parent, message=message, wildcard=wildcard,
-                            defaultFile=default_file,
-                            defaultDir=default_dir,
-                            style=style)
-
-        if dlg.ShowModal() == wx.ID_OK:
-            if multiple:
-                out = [Path(p).absolute().as_posix() for p in dlg.GetPaths()]
-            else:
-                out = Path(dlg.GetPath()).absolute().as_posix()
-        dlg.Destroy()
-        return out
-
-
-    def FileSave(parent, message, **kws):
-        "File Save dialog"
-        result = wxu.FileSave(parent, message, **kws)
-        if result is None:
-            return
-        return Path(result).absolute().as_posix()
-
-    def SelectWorkdir(parent,  **kws):
-        "prompt for and change into a working directory "
-        return Path(wxu.SelectWorkdir(parent, **kws)).absolute().as_posix()
 
     from .larchframe import LarchFrame, LarchPanel
     from .columnframe import ColumnDataFileFrame, EditColumnFrame
     from .athena_importer import AthenaImporter
     from .specfile_importer import SpecfileImporter
     from .xas_importer import XasImporter
-    from .reportframe import ReportFrame, DictFrame, DataTableGrid
+    from .reportframe import ReportFrame, DictFrame, DataTableGrid, CSVFrame
     from .gui_utils import (databrowser, fileprompt, LarchWxApp, wx_update)
     from .larch_updater import LarchUpdaterDialog
     from .parameter import ParameterWidgets, ParameterPanel
+    from .xafsplots import plotlabels
 
     from .feff_browser import FeffResultsFrame, FeffResultsPanel
     from .cif_browser import CIFFrame
@@ -136,7 +157,7 @@ if HAS_WXPYTHON:
 
     _larch_builtins = {'_sys.wx': dict(gcd=gcd,
                                        databrowser=databrowser,
-                                       filepromspt=fileprompt,
+                                       fileprompt=fileprompt,
                                        wx_update=wx_update)}
 
     from .plotter import (_plot, _oplot, _newplot, _plot_text, fileplot,
@@ -146,11 +167,10 @@ if HAS_WXPYTHON:
                           get_display, _closeDisplays, _getcursor,
                           last_cursor_pos, _imshow, _contour, _xrf_plot,
                           _xrf_oplot, _fitplot, _redraw_plot,
-                          get_zoomlimits, set_zoomlimits)
-
-
-    from . import xafsplots
-    from .xafsplots import plotlabels
+                          get_zoomlimits, set_zoomlimits,
+                          save_plot_config, get_plot_config,
+                          get_panel_plot_config, set_panel_plot_config,
+                          get_zorders, get_markercolors, set_plotwindow_title)
 
     if uname == 'darwin':
         HLine = DarwinHLine
@@ -166,6 +186,8 @@ if HAS_WXPYTHON:
                                        update_trace=_update_trace,
                                        save_plot=_saveplot,
                                        save_image=_saveimg,
+                                       save_plot_config=save_plot_config,
+                                       get_plot_config=get_plot_config,
                                        get_display=get_display,
                                        close_all_displays=_closeDisplays,
                                        get_cursor=_getcursor,
@@ -178,7 +200,7 @@ if HAS_WXPYTHON:
                                        redraw_plot=_redraw_plot)
 
     _larch_builtins['_xafs'] = dict(redraw=xafsplots.redraw,
-                                    plotlabels=xafsplots.plotlabels,
+                                    plotlabels=plotlabels,
                                     plot_mu=xafsplots.plot_mu,
                                     plot_bkg=xafsplots.plot_bkg,
                                     plot_chie=xafsplots.plot_chie,
@@ -197,7 +219,9 @@ if HAS_WXPYTHON:
                                     plot_prepeaks_baseline=xafsplots.plot_prepeaks_baseline,
                                     plot_pca_components=xafsplots.plot_pca_components,
                                     plot_pca_weights=xafsplots.plot_pca_weights,
-                                    plot_pca_fit=xafsplots.plot_pca_fit)
+                                    plot_pca_fit=xafsplots.plot_pca_fit,
+                                    plot_curvefit=xafsplots.plot_curvefit,
+                                    )
 
 
     def _larch_init(_larch):
@@ -233,36 +257,3 @@ if HAS_WXPYTHON:
         os.system = my_system
         os.startfile = my_startfile
     #############################
-
-else:
-    def nullfunc(*args, **kws):
-        pass
-
-    _larch_builtins = {'_sys.wx': dict(gcd=nullfunc,
-                                       databrowser=nullfunc,
-                                       filepromspt=nullfunc,
-                                       wx_update=nullfunc)}
-
-    _larch_builtins['_plotter'] = dict(plot=nullfunc,
-                                       oplot=nullfunc,
-                                       newplot=nullfunc,
-                                       plot_text=nullfunc,
-                                       plot_marker=nullfunc,
-                                       plot_arrow=nullfunc,
-                                       plot_setlimits=nullfunc,
-                                       plot_axvline=nullfunc,
-                                       plot_axhline=nullfunc,
-                                       scatterplot=nullfunc,
-                                       hist=nullfunc,
-                                       update_trace=nullfunc,
-                                       save_plot=nullfunc,
-                                       save_image=nullfunc,
-                                       get_display=nullfunc,
-                                       close_all_displays=nullfunc,
-                                       get_cursor=nullfunc,
-                                       last_cursor_pos=nullfunc,
-                                       imshow=nullfunc,
-                                       contour=nullfunc,
-                                       xrf_plot=nullfunc,
-                                       xrf_oplot=nullfunc,
-                                       fit_plot=nullfunc)

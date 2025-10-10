@@ -126,7 +126,7 @@ class RegressionPanel(TaskPanel):
         coltypes = ['str', 'float:12,4', 'float:12,4', 'str']
         coldefs  = ['', 0.0, 0.0, '']
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
 
         wids['table'] = DataTableGrid(panel, nrows=MAX_ROWS,
                                       collabels=collabels,
@@ -215,7 +215,7 @@ class RegressionPanel(TaskPanel):
         self.update_fit_xspace(arrname)
 
 
-    def fill_form(self, dgroup=None, opts=None):
+    def fill_form(self, dgroup=None, opts=None, initial=False):
         conf = deepcopy(self.get_config(dgroup=dgroup, with_erange=True))
         if opts is None:
             opts = {}
@@ -519,7 +519,12 @@ class RegressionPanel(TaskPanel):
             return
         opts.update(model.form)
 
-        ppanel = self.controller.get_display(win=1).panel
+
+        disp = self.controller.get_display(stacked=False, win=1)
+        ppanel = disp.panel
+        self.controller.set_datatask_name(self.title)
+        set_plotwindow_title(disp, self.controller.larch)
+
         viewlims = ppanel.get_viewlimits()
         plotcmd = ppanel.plot
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """Version information"""
 
-__release_version__ = '2025.1.1'
-__date__    = '2025-Janunary-12'
+__release_version__ = '2025.3.0'
+__date__    = '2025-September-10'
 __authors__ = "M. Newville, M. Rovezzi, M. Koker, B. Ravel, and others"
 
 from ._version import __version__, __version_tuple__
@@ -12,6 +12,7 @@ from packaging.version import parse as ver_parse
 
 import importlib
 import urllib3
+from subprocess import check_call
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -143,3 +144,26 @@ def check_larchversion():
     message = message.format(remote_version=remote_version,
                              local_version=local_version)
     return VersionStatus(update_available,local_version, remote_version, message)
+
+NIGHTLY_URL  = 'https://millenia.cars.aps.anl.gov/xraylarch/downloads/'
+NIGHTLY_WHEEL = 'xraylarch-latest.txt'
+
+def upgrade_nightly_build():
+    "pip install from latest nightly build"
+    import requests
+    try:
+        url = f'{NIGHTLY_URL}/{NIGHTLY_WHEEL}'
+        req = requests.get(f'{NIGHTLY_URL}/{NIGHTLY_WHEEL}', verify=False, timeout=10.0)
+    except:
+        print("could not get nightly build", url)
+        return
+
+    if req.status_code == 200:
+        fname = req.text.split()[0]
+        print("Downloading wheel for nightly build: {fname}")
+        check_call([sys.executable, '-m', 'pip', 'install', f'{NIGHTLY_URL}{fname}'])
+
+def upgrade_from_pypi():
+    "pip installl/upgrade larch from PyPI"
+    target = 'xraylarch[larix]' if with_larix else 'xraylarch'
+    check_call([sys.executable, '-m', 'pip', 'install', '--upgrade', target])

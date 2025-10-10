@@ -6,13 +6,14 @@ import locale
 import inspect
 import shutil
 from argparse import ArgumentParser
-from  pathlib import Path
+from pathlib import Path
 
 import matplotlib
 from pyshortcuts import make_shortcut, ico_ext, get_folders
 
-from .site_config import icondir, uname, update_larch
-from .version import __date__, make_banner, check_larchversion
+from .site_config import icondir, uname
+from .version import (__date__, make_banner, check_larchversion,
+                      upgrade_nightly_build, upgrade_from_pypi)
 
 HAS_WXPYTHON = False
 try:
@@ -72,9 +73,9 @@ class LarchApp(object):
         parser = ArgumentParser(description=self.description)
         parser.add_argument('filename', nargs='?',  help=self.filetype)
 
-        parser.add_argument('-m', '-mode', dest='run_mode', action='store_true',
-                            default='xas', help='set startup mode')
-        parser.add_argument('-w', '-wx_inspect', dest='wx_inspect', action='store_true',
+        parser.add_argument('-m', '-mode', dest='run_mode',
+                            default='none', help='set startup mode')
+        parser.add_argument('-w', '-wx_inspect', dest='wx_inspect',
                             default=False, help='enable wxPython inspection and debugging')
 
         args = parser.parse_args()
@@ -211,7 +212,8 @@ def run_larch():
              ("-x", "--nowx", "nowx", False, "set no wx graphics mode"),
              ("-w", "--wxgui", "wxgui", False, "run Larch GUI"),
              ("-m", "--makeicons", "makeicons", False, "create desktop icons"),
-             ("-u", "--update", "update", False, "update larch to the latest version"),
+             ("-u", "--update", "update", False, "update larch to the latest release version"),
+             ("-n", "--nightly", "nightly", False, "update larch to the latest nigthly/development version"),
              ("-r", "--remote", "server_mode", False, "run in remote server mode"))
 
 
@@ -248,9 +250,12 @@ def run_larch():
             app.make_desktop_shortcut()
         return
 
-    # run updates
-    if args.update:
-        update_larch()
+    # update to latest release or nightly build
+    if args.update or args.nightly:
+        if args.nightly:
+            upgrade_nightly_build()
+        else:
+            upgrade_from_pypi()
         return
 
     # run in server mode

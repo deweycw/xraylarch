@@ -6,11 +6,12 @@ import h5py
 import numpy as np
 from pathlib import Path
 import scipy.stats as stats
+from scipy.interpolate import interp1d
 import json
 import multiprocessing as mp
 from functools import partial
 
-from pyshortcuts import fix_varname, fix_filename, bytes2str
+from pyshortcuts import fix_varname, fix_filename, bytes2str, debugtimer
 
 from larch.utils import isotime, version_ge, unixpath
 
@@ -272,7 +273,8 @@ class GSEXRM_MapFile(object):
         self.force_no_dtc  = False
         self.all_mcas      = all_mcas
         self.detector_list = None
-
+        self.mca_energies = None
+        self.calib = None
         self.compress_args = {'compression': compression}
         if compression != 'lzf':
             self.compress_args['compression_opts'] = compression_opts
@@ -370,7 +372,7 @@ class GSEXRM_MapFile(object):
                 cfile = FastMapConfig()
                 cfile.Read(Path(self.folder, self.ScanFile))
                 cfile.config['scan']['filename'] = self.filename
-            print("Create HDF5 File  ")
+            # print("Create HDF5 File  ")
             self.h5root = h5py.File(self.filename, 'w')
             self.write_access = True
             if self.dimension is None and isGSEXRM_MapFolder(self.folder):
@@ -396,7 +398,7 @@ class GSEXRM_MapFile(object):
                               xrd1dbkgdfile=xrd1dbkgd)
         elif (self.filename is not None and
               self.status == GSEXRM_FileStatus.err_notfound and create_empty):
-            print("Create HDF5 File")
+            # print("Create HDF5 File")
             self.h5root = h5py.File(self.filename, 'w')
             self.write_access = True
             create_xrmmap(self.h5root, root=None, dimension=2, start_time=self.start_time)
@@ -598,6 +600,7 @@ class GSEXRM_MapFile(object):
         kws.update(self.compress_args)
         if name in group:
             del group[name]
+        # print("Add Data ", group, name, type(data), kws)
         d = group.create_dataset(name, data=data, **kws)
         if isinstance(attrs, dict):
             for key, val in attrs.items():
@@ -640,6 +643,7 @@ class GSEXRM_MapFile(object):
         if os.path.exists(roifile):
             roidat, calib, extra = readROIFile(roifile)
             self.xrmmap.attrs['N_Detectors'] = self.nmca = len(calib['slope'])
+            # print("CALIB ", calib)
             roi_desc, roi_addr, roi_lim = [], [], []
             roi_slices = []
 
@@ -670,6 +674,7 @@ class GSEXRM_MapFile(object):
             self.roi_addr = roi_addr
             self.roi_slices = roi_slices
             self.calib = calib
+            # print("SET CALIB ", calib)
         else:
             nmca = self.nmca
             roilims = np.array([ [[0, 1]] for i in range(nmca)])
@@ -867,7 +872,6 @@ class GSEXRM_MapFile(object):
                 self.xrdcalfile = calfile
 
         scan_version = getattr(self, 'scan_version', 1.00)
-        print(" read row data, scan version  ", scan_version, self.xrdcalfile)
         xrdcal_dat = bytes2str(self.xrmmap['xrd1d'].attrs.get('caldata','{}'))
         if self.xrdcalfile is not None and len(xrdcal_dat) < 10:
             xrdcal_dat = read_poni(self.xrdcalfile)
@@ -931,7 +935,7 @@ class GSEXRM_MapFile(object):
 
     def add_rowdata(self, row, callback=None, flush=True):
         '''adds a row worth of real data'''
-        # dt = debugtimer()
+        dt = debugtimer()
         if not self.check_hostid():
             raise GSEXRM_Exception(NOT_OWNER % self.filename)
         if not self.write_access:
@@ -948,31 +952,30 @@ class GSEXRM_MapFile(object):
             pform = '%s, xrdfile=%s' % (pform, row.xrdfile)
         print(pform)
 
-        # dt.add(" ran callback, print, version  %s"  %self.version)
+        dt.add(" ran callback, print, version  %s"  %self.version)
+
 
         if version_ge(self.version, '2.0.0'):
-
-            mcasum_raw,mcasum_cor = [],[]
+            mcasum_raw, mcasum_cor = [],[]
             nrows = 0
             map_items = sorted(self.xrmmap.keys())
-            # dt.add(" get %d map items" % len(map_items))
+            dt.add(" get %d map items" % len(map_items))
             for gname in map_items:
                 g = self.xrmmap[gname]
                 if bytes2str(g.attrs.get('type', '')).startswith('scalar detect'):
                     first_det = list(g.keys())[0]
                     nrows, npts =  g[first_det].shape
 
-            # dt.add(" got %d map items" % len(map_items))
+            dt.add(" got %d map items" % len(map_items))
             if thisrow >= nrows:
                 self.resize_arrays(NINIT*(1+nrows/NINIT), force_shrink=False)
 
-            # dt.add(" resized ")
+            dt.add(" resized ")
             sclrgrp = self.xrmmap['scalars']
             for ai, aname in enumerate(row.scaler_names):
                 sclrgrp[aname][thisrow,  :npts] = row.sisdata[:npts].transpose()[ai]
-            # dt.add(" add scaler group")
+            dt.add(" add scaler group")
             if self.has_xrf:
-
                 npts = min([len(p) for p in row.posvals])
                 pos    = self.xrmmap['positions/pos']
                 rowpos = np.array([p[:npts] for p in row.posvals])
@@ -980,18 +983,39 @@ class GSEXRM_MapFile(object):
                 tpos = rowpos.transpose()
                 pos[thisrow, :npts, :] = tpos[:npts, :]
                 nmca, xnpts, nchan = row.counts.shape
+
+                if self.calib is None:
+                    self.calib = {'offset': self.xrmmap['config/mca_calib/offset'][()],
+                                  'slope': self.xrmmap['config/mca_calib/slope'][()],
+                                  'quad': self.xrmmap['config/mca_calib/quad'][()]}
+
+                if self.mca_energies is None:
+                    off = self.calib['offset']
+                    slo = self.calib['slope']
+                    xoff = max(off) - min(off)
+                    xslo = max(slo) - min(slo)
+                    if xslo > 1.e-6 or xoff > 1.e-4: # needs recalibration
+                        self.mca_energies  = []
+                        enx = np.arange(nchan)
+                        for i in range(nmca):
+                            off = self.calib['offset'][i]
+                            slope = self.calib['slope'][i]
+                            quad = self.calib['quad'][i]
+                            self.mca_energies.append(off + enx*(slope+quad*enx))
+
+
                 mca_dets = []
-                # dt.add(" map xrf 1")
+                dt.add(" map xrf 1")
                 for gname in map_items:
                     g = self.xrmmap[gname]
                     if bytes2str(g.attrs.get('type', '')).startswith('mca detect'):
                         mca_dets.append(gname)
                         nrows, npts, nchan =  g['counts'].shape
-                # dt.add(" map xrf 2")
+                dt.add(" map xrf 2")
                 _nr, npts, nchan = self.xrmmap['mcasum']['counts'].shape
+
                 npts = min(npts, xnpts, self.npts)
-                # dt.add(" map xrf 3")
-                # print("ADD ROW ", self.all_mcas, mca_dets, self.nmca)
+                dt.add(" map xrf 3")
                 if self.all_mcas:
                     for idet, gname in enumerate(mca_dets):
                         grp = self.xrmmap[gname]
@@ -1007,7 +1031,7 @@ class GSEXRM_MapFile(object):
                 dtfactor = np.zeros(npts, dtype=np.float32)
                 inpcounts = np.zeros(npts, dtype=np.float32)
                 outcounts = np.zeros(npts, dtype=np.float32)
-                # dt.add(" map xrf 4a: alloc ")
+                dt.add(" map xrf 4a: alloc ")
                 # print("ADD ", inpcounts.dtype, row.inpcounts.dtype)
                 for idet in range(self.nmca):
                     realtime += row.realtime[idet, :npts]
@@ -1016,18 +1040,27 @@ class GSEXRM_MapFile(object):
                     outcounts += row.outcounts[idet, :npts]
                 livetime /= (1.0*self.nmca)
                 realtime /= (1.0*self.nmca)
-                # dt.add(" map xrf 4b: time sums")
+                dt.add(" map xrf 4b: time sums")
 
                 sumgrp = self.xrmmap['mcasum']
-                sumgrp['counts'][thisrow, :npts, :nchan] = row.total[:npts, :nchan]
-                # dt.add(" map xrf 4b: set counts")
-                # print("add realtime ", sumgrp['realtime'].shape, self.xrmmap['roimap/det_raw'].shape, thisrow)
+                ensum  = sumgrp['energy']
+                if self.mca_energies is None:
+                    sumgrp['counts'][thisrow, :npts, :nchan] = row.total[:npts, :nchan]
+                else:
+                    sumx = row.counts[0, :npts, :nchan]*0.0
+                    for i in range(self.nmca):
+                        en = self.mca_energies[i]
+                        sumx += interp1d(en, row.counts[i], kind='linear', fill_value=0,
+                                         copy=False, bounds_error=False)(ensum)
+                    sumgrp['counts'][thisrow, :npts, :nchan] = sumx
+
+                dt.add(" map xrf 4b: set counts")
                 sumgrp['realtime'][thisrow,  :npts] = realtime
                 sumgrp['livetime'][thisrow,  :npts] = livetime
                 sumgrp['dtfactor'][thisrow,  :npts] = row.total_dtfactor[:npts]
                 sumgrp['inpcounts'][thisrow,  :npts] = inpcounts
                 sumgrp['outcounts'][thisrow,  :npts] = outcounts
-                # dt.add(" map xrf 4c: set time data ")
+                dt.add(" map xrf 4c: set time data ")
 
                 if version_ge(self.version, '2.1.0'): # version 2.1
                     det_raw = self.xrmmap['roimap/det_raw']
@@ -1059,7 +1092,7 @@ class GSEXRM_MapFile(object):
                         detcor.extend(icor)
                         sumraw.append(np.array(iraw).sum(axis=0))
                         sumcor.append(np.array(icor).sum(axis=0))
-                    # dt.add(" map xrf 5a: got simple  ROIS")
+                    dt.add(" map xrf 5a: got simple  ROIS")
                     det_raw[thisrow, :npts, :] = np.array(detraw).transpose()
                     det_cor[thisrow, :npts, :] = np.array(detcor).transpose()
                     sum_raw[thisrow, :npts, :] = np.array(sumraw).transpose()
@@ -1084,80 +1117,81 @@ class GSEXRM_MapFile(object):
                             sumcor += mcacor
                         roigrp['mcasum'][roiname]['raw'][thisrow,] = sumraw
                         roigrp['mcasum'][roiname]['cor'][thisrow,] = sumcor
-                # dt.add(" map xrf 6")
+                dt.add(" map xrf 6")
         else:  # version 1.0.1
-            if self.has_xrf:
-                nmca, xnpts, nchan = row.counts.shape
-                xrm_dets = []
-
-                nrows = 0
-                map_items = sorted(self.xrmmap.keys())
-                for gname in map_items:
-                    g = self.xrmmap[gname]
-                    if bytes2str(g.attrs.get('type', '')).startswith('mca detect'):
-                        xrm_dets.append(g)
-                        nrows, npts, nchan =  g['counts'].shape
-
-                if thisrow >= nrows:
-                    self.resize_arrays(NINIT*(1+nrows/NINIT), force_shrink=False)
-
-                _nr, npts, nchan = xrm_dets[0]['counts'].shape
-                npts = min(npts, xnpts, self.npts)
-                for idet, grp in enumerate(xrm_dets):
-                    grp['dtfactor'][thisrow,  :npts] = row.dtfactor[idet, :npts]
-                    grp['realtime'][thisrow,  :npts] = row.realtime[idet, :npts]
-                    grp['livetime'][thisrow,  :npts] = row.livetime[idet, :npts]
-                    grp['inpcounts'][thisrow, :npts] = row.inpcounts[idet, :npts]
-                    grp['outcounts'][thisrow, :npts] = row.outcounts[idet, :npts]
-                    grp['counts'][thisrow, :npts, :] = row.counts[idet, :npts, :]
-
-                # here, we add the total dead-time-corrected data to detsum.
-                self.xrmmap['detsum']['counts'][thisrow, :npts, :nchan] = row.total[:npts, :nchan]
-
-                pos    = self.xrmmap['positions/pos']
-                rowpos = np.array([p[:npts] for p in row.posvals])
-
-                tpos = rowpos.transpose()
-
-                pos[thisrow, :npts, :] = tpos[:npts, :]
-
-                # now add roi map data
-                roimap = self.xrmmap['roimap']
-                det_raw = roimap['det_raw']
-                det_cor = roimap['det_cor']
-                sum_raw = roimap['sum_raw']
-                sum_cor = roimap['sum_cor']
-
-                detraw = list(row.sisdata[:npts].transpose())
-
-                detcor = detraw[:]
-                sumraw = detraw[:]
-                sumcor = detraw[:]
-
-                if self.roi_slices is None:
-                    lims = self.xrmmap['config/rois/limits'][()]
-                    nrois, nmca, nx = lims.shape
-
-                    self.roi_slices = []
-                    for iroi in range(nrois):
-                        x = [slice(lims[iroi, i, 0],
-                                   lims[iroi, i, 1]) for i in range(nmca)]
-                        self.roi_slices.append(x)
-
-                for slices in self.roi_slices:
-                    iraw = [row.counts[i, :npts, slices[i]].sum(axis=1)
-                            for i in range(nmca)]
-                    icor = [row.counts[i, :npts, slices[i]].sum(axis=1)*row.dtfactor[i, :npts]
-                            for i in range(nmca)]
-                    detraw.extend(iraw)
-                    detcor.extend(icor)
-                    sumraw.append(np.array(iraw).sum(axis=0))
-                    sumcor.append(np.array(icor).sum(axis=0))
-
-                det_raw[thisrow, :npts, :] = np.array(detraw).transpose()
-                det_cor[thisrow, :npts, :] = np.array(detcor).transpose()
-                sum_raw[thisrow, :npts, :] = np.array(sumraw).transpose()
-                sum_cor[thisrow, :npts, :] = np.array(sumcor).transpose()
+            print("version1?")
+#             if self.has_xrf:
+#                 nmca, xnpts, nchan = row.counts.shape
+#                 xrm_dets = []
+#
+#                 nrows = 0
+#                 map_items = sorted(self.xrmmap.keys())
+#                 for gname in map_items:
+#                     g = self.xrmmap[gname]
+#                     if bytes2str(g.attrs.get('type', '')).startswith('mca detect'):
+#                         xrm_dets.append(g)
+#                         nrows, npts, nchan =  g['counts'].shape
+#
+#                 if thisrow >= nrows:
+#                     self.resize_arrays(NINIT*(1+nrows/NINIT), force_shrink=False)
+#
+#                 _nr, npts, nchan = xrm_dets[0]['counts'].shape
+#                 npts = min(npts, xnpts, self.npts)
+#                 for idet, grp in enumerate(xrm_dets):
+#                     grp['dtfactor'][thisrow,  :npts] = row.dtfactor[idet, :npts]
+#                     grp['realtime'][thisrow,  :npts] = row.realtime[idet, :npts]
+#                     grp['livetime'][thisrow,  :npts] = row.livetime[idet, :npts]
+#                     grp['inpcounts'][thisrow, :npts] = row.inpcounts[idet, :npts]
+#                     grp['outcounts'][thisrow, :npts] = row.outcounts[idet, :npts]
+#                     grp['counts'][thisrow, :npts, :] = row.counts[idet, :npts, :]
+#
+#                 # here, we add the total dead-time-corrected data to detsum.
+#                 self.xrmmap['detsum']['counts'][thisrow, :npts, :nchan] = row.total[:npts, :nchan]
+#
+#                 pos    = self.xrmmap['positions/pos']
+#                 rowpos = np.array([p[:npts] for p in row.posvals])
+#
+#                 tpos = rowpos.transpose()
+#
+#                 pos[thisrow, :npts, :] = tpos[:npts, :]
+#
+#                 # now add roi map data
+#                 roimap = self.xrmmap['roimap']
+#                 det_raw = roimap['det_raw']
+#                 det_cor = roimap['det_cor']
+#                 sum_raw = roimap['sum_raw']
+#                 sum_cor = roimap['sum_cor']
+#
+#                 detraw = list(row.sisdata[:npts].transpose())
+#
+#                 detcor = detraw[:]
+#                 sumraw = detraw[:]
+#                 sumcor = detraw[:]
+#
+#                 if self.roi_slices is None:
+#                     lims = self.xrmmap['config/rois/limits'][()]
+#                     nrois, nmca, nx = lims.shape
+#
+#                     self.roi_slices = []
+#                     for iroi in range(nrois):
+#                         x = [slice(lims[iroi, i, 0],
+#                                    lims[iroi, i, 1]) for i in range(nmca)]
+#                         self.roi_slices.append(x)
+#
+#                 for slices in self.roi_slices:
+#                     iraw = [row.counts[i, :npts, slices[i]].sum(axis=1)
+#                             for i in range(nmca)]
+#                     icor = [row.counts[i, :npts, slices[i]].sum(axis=1)*row.dtfactor[i, :npts]
+#                             for i in range(nmca)]
+#                     detraw.extend(iraw)
+#                     detcor.extend(icor)
+#                     sumraw.append(np.array(iraw).sum(axis=0))
+#                     sumcor.append(np.array(icor).sum(axis=0))
+#
+#                 det_raw[thisrow, :npts, :] = np.array(detraw).transpose()
+#                 det_cor[thisrow, :npts, :] = np.array(detcor).transpose()
+#                 sum_raw[thisrow, :npts, :] = np.array(sumraw).transpose()
+#                 sum_cor[thisrow, :npts, :] = np.array(sumcor).transpose()
 
         if self.has_xrd1d and row.xrdq is not None:
             if thisrow < 2:
@@ -1194,7 +1228,7 @@ class GSEXRM_MapFile(object):
         self.last_row = thisrow
         self.xrmmap.attrs['Last_Row'] = thisrow
         #self.h5root.flush()
-        # dt.add("flushed h5 file")
+        dt.add("flushed h5 file")
         # dt.show()
 
 
@@ -1228,6 +1262,7 @@ class GSEXRM_MapFile(object):
 
         if self.chunksize is None:
             self.chunksize = (1, min(2048, npts), nchan)
+            self.chunksize = (128, 128, 256)
 
         if nrows_expected is not None:
             NSTART = max(NINIT, nrows_expected)
@@ -2313,40 +2348,25 @@ class GSEXRM_MapFile(object):
         if self.folder is None or not isGSEXRM_MapFolder(self.folder):
             return
         self.masterfile = unixpath(Path(self.folder, self.MasterFile))
+        # print("Master File ", self.masterfile, self.scandb)
         header, rows, mtime = [], [], -1
-        if self.scandb is not None:
-            # check that this map folder is the one currently running from scandb:
-            try:
-                db_folder = toppath(self.scandb.get_info('map_folder'))
-            except:
-                db_folder = None
-            disk_folder = toppath(Path(self.folder).absolute().as_posix())
 
-            if db_folder == disk_folder: # this is the current map
-                mastertext = self.scandb.get_slewscanstatus()
-                mtime = time.time()
-                header, rows = [], []
-                for srow in mastertext:
-                    line = str(srow.text.strip())
-                    if line.startswith('#'):
-                        header.append(line)
-                    else:
-                        rows.append(line.split())
-
-        if len(header) < 1 or mtime < 0:  # this is *not* the map that is currently being collected:
+        # if len(header) < 1 or mtime < 0:  # this is *not* the map that is currently being collected:
             # if file the master file is not new, the current row data is OK:
 
-            try:
-                header, rows = readMasterFile(self.masterfile)
-            except IOError:
-                raise GSEXRM_Exception("cannot read Master file from '%s'" %
-                                       self.masterfile)
-
-            mtime = os.stat(self.masterfile).st_mtime
-            if mtime < (self.master_modtime+1.0) and len(self.rowdata) > 1:
-                # print("READ MASTER not a new masterfile ", len(self.rowdata), len(rows))
-                return len(self.rowdata)
-
+        try:
+            header, rows = readMasterFile(self.masterfile)
+        except IOError:
+            raise GSEXRM_Exception("cannot read Master file from '%s'" %
+                                   self.masterfile)
+        # print(f"Read Master nrows={len(rows)}, current ={len(self.rowdata)}")
+        # if len(rows) < len(self.rowdata):
+        #    print("no new data in master file")
+        #    return len(self.rowdata)
+        # if mtime < (self.master_modtime+1.0) and len(self.rowdata) > 1:
+        #     print("READ MASTER not a new masterfile ", len(self.rowdata), len(rows))
+        #    return len(self.rowdata)
+        mtime = os.stat(self.masterfile).st_mtime
         self.master_modtime = mtime
 
         self.notes['end_time'] = isotime(mtime)
@@ -2354,7 +2374,10 @@ class GSEXRM_MapFile(object):
         # carefully read rows to avoid repeated rows due to bad collection
         self.rowdata = []
         _yl, _xl, _s1 = None, None, None
+
         for row in rows:
+            if len(row) < 3:
+                continue
             yval, xrff, sisf = row[0], row[1], row[2]
             il = len(self.rowdata)-1
             if il > -1:

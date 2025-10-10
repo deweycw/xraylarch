@@ -11,11 +11,12 @@ import wx
 import larch
 from larch import Group
 from larch.io import read_athena
-# from .colors import COLORS, set_color
 
-from wxutils import (SimpleText, Button, Choice, FileCheckList,
-                     FileDropTarget, pack, Check, MenuItem, SetTip, Popup,
-                     CEN, LEFT, FRAMESTYLE, Font, COLORS, set_color)
+from . import (SimpleText, Button, Choice, FileCheckList,
+               FileDropTarget, pack, Check, MenuItem, SetTip, Popup,
+               CEN, LEFT, FRAMESTYLE, Font)
+
+from .wxcolors import GUI_COLORS
 
 from wxmplot import PlotPanel
 
@@ -43,7 +44,8 @@ class AthenaImporter(wx.Frame) :
 
         self.select_imported = sel_imp
         self.grouplist = FileCheckList(leftpanel, select_action=self.onShowGroup)
-        set_color(self.grouplist, 'list_fg', bg='list_bg')
+        self.grouplist.SetForegroundColour(GUI_COLORS.list_fg)
+        self.grouplist.SetBackgroundColour(GUI_COLORS.list_bg)
 
         tsizer = wx.GridBagSizer(2, 2)
         tsizer.Add(sel_all, (0, 0), (1, 1), LEFT, 0)
@@ -62,16 +64,15 @@ class AthenaImporter(wx.Frame) :
 
         self.SetTitle("Reading Athena Project '%s'" % self.filename)
         self.title = SimpleText(rightpanel, self.filename, font=Font(13),
-                                colour=COLORS['title'], style=LEFT)
+                                colour=GUI_COLORS.title, style=LEFT)
 
         self.plotpanel = PlotPanel(rightpanel, messenger=self.plot_messages)
-        plotconf = self.controller.get_config('plot')
-        self.plotpanel.conf.set_theme(plotconf['theme'])
-        self.plotpanel.conf.enable_grid(plotconf['show_grid'])
+        from .plotter import get_plot_config
+        self.plotpanel.set_config(**get_plot_config())
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(self.title, 0, LEFT, 2)
-        sizer.Add(self.plotpanel, 0, LEFT, 2)
+        sizer.Add(self.plotpanel, 1, wx.ALL|wx.GROW|LEFT, 2)
         pack(rightpanel, sizer)
 
         splitter.SplitVertically(leftpanel, rightpanel, 1)
@@ -84,6 +85,7 @@ class AthenaImporter(wx.Frame) :
 
         self.a_project = read_athena(self.filename, do_bkg=False, do_fft=False)
         self.allgroups = {}
+        group0 = None
         for sname, grp in self.a_project.groups.items():
             if hasattr(grp, 'energy') and hasattr(grp, 'mu'):
                 label = getattr(grp, 'label', sname)
@@ -92,9 +94,19 @@ class AthenaImporter(wx.Frame) :
                     self.grouplist.Append(label)
                 except:
                     print(' ? ', sname, label)
+                if group0 is None:
+                    group0 = sname
+
+        if group0 is not None:
+            grp = getattr(self.a_project, group0)
+            if hasattr(grp, 'energy') and hasattr(grp, 'mu'):
+                label = getattr(grp, 'label', group0)
+                self.plotpanel.plot(grp.energy, grp.mu,
+                                    xlabel='Energy', ylabel='mu',title=label)
         self.grouplist.SetCheckedStrings(list(self.allgroups.keys()))
         self.Show()
         self.Raise()
+
 
     def plot_messages(self, msg, panel=1):
         self.SetStatusText(msg, panel)
@@ -106,7 +118,7 @@ class AthenaImporter(wx.Frame) :
 
             cancel = Popup(self, """No data groups selected.
         Cancel import from this project?""", 'Cancel Import?',
-                           style=wx.YES_NO)
+        style=wx.YES_NO)
             if wx.ID_YES == cancel:
                 self.Destroy()
             else:
@@ -114,7 +126,7 @@ class AthenaImporter(wx.Frame) :
 
         if self.read_ok_cb is not None:
             self.read_ok_cb(self.filename, namelist)
-        self.Destroy()
+            self.Destroy()
 
     def onCancel(self, event=None):
         self.Destroy()

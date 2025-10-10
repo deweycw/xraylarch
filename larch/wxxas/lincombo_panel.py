@@ -23,7 +23,7 @@ from larch.xafs import etok, ktoe
 from larch.wxlib import (BitmapButton, FloatCtrl, FloatSpin, ToggleButton,
                          GridPanel, get_icon, SimpleText, pack, Button,
                          HLine, Choice, Check, CEN, LEFT, Font, FONTSIZE,
-                         FONTSIZE_FW, MenuItem, FRAMESTYLE, COLORS,
+                         FONTSIZE_FW, MenuItem, FRAMESTYLE, GUI_COLORS,
                          set_color, FileSave, EditableListBox,
                          DataTableGrid)
 
@@ -47,7 +47,7 @@ def make_lcfplot(dgroup, form, with_fit=True, nfit=0):
     form['filename'] = dgroup.filename
     form['nfit'] = nfit
     form['label'] = label = 'Fit #%2.2d' % (nfit+1)
-
+    arrname = form.get('arrayname', 'norm')
     if 'win' not in form: form['win'] = 1
     kspace = form['arrayname'].startswith('chi')
     if kspace:
@@ -61,16 +61,20 @@ def make_lcfplot(dgroup, form, with_fit=True, nfit=0):
 
     else:
         form['plotopt'] = 'show_norm=False'
-        if form['arrayname'] == 'norm':
+        if arrname == 'norm':
             form['plotopt'] = 'show_norm=True'
-        elif form['arrayname'] == 'flat':
+        elif arrname == 'flat':
             form['plotopt'] = 'show_flat=True'
-        elif form['arrayname'] == 'dmude':
+        elif arrname == 'dmude':
             form['plotopt'] = 'show_deriv=True'
 
-        erange = form['ehi'] - form['elo']
-        form['pemin'] = 10*int( (form['elo'] - 5 - erange/4.0) / 10.0)
-        form['pemax'] = 10*int( (form['ehi'] + 5 + erange/4.0) / 10.0)
+        elo, ehi = form['elo'], form['ehi']
+        if elo > dgroup.energy.min():
+            elo, ehi = elo - dgroup.e0, ehi - dgroup.e0
+
+        erange = ehi - elo
+        form['pemin'] = 10*int((elo - 5 - erange/4.0) / 10.0)
+        form['pemax'] = 10*int((ehi + 5 + erange/4.0) / 10.0)
 
         cmds = ["""plot_mu({group:s}, {plotopt:s}, delay_draw=True, label='data',
         emin={pemin:.1f}, emax={pemax:.1f}, title='{filename:s}, {label:s}', win={win:d})"""]
@@ -161,8 +165,7 @@ class LinComboResultFrame(wx.Frame):
         panel = scrolled.ScrolledPanel(splitter)
 
         self.SetMinSize((650, 600))
-
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
 
         self.wids = wids = {}
         wids['plot_one'] = Button(panel, 'Plot This Fit', size=(125, -1),
@@ -184,7 +187,7 @@ class LinComboResultFrame(wx.Frame):
         wids['data_title'] = SimpleText(panel, 'Linear Combination Result: <> ',
                                         font=Font(FONTSIZE+2),
                                         size=(400, -1),
-                                        colour=COLORS['title'], style=LEFT)
+                                        colour=GUI_COLORS.title, style=LEFT)
         wids['nfits_title'] = SimpleText(panel, 'showing 5 best fits')
         wids['fitspace_title'] = SimpleText(panel, 'Array Fit: ')
 
@@ -203,9 +206,8 @@ class LinComboResultFrame(wx.Frame):
         irow += 1
         self.wids['paramstitle'] = SimpleText(panel, '[[Parameters]]',
                                               font=Font(FONTSIZE+2),
-                                              colour=COLORS['title'], style=LEFT)
+                                              colour=GUI_COLORS.title, style=LEFT)
         sizer.Add(self.wids['paramstitle'], (irow, 0), (1, 3), LEFT)
-
 
         pview = self.wids['params'] = dv.DataViewListCtrl(panel, style=DVSTYLE)
         pview.SetFont(self.font_fixedwidth)
@@ -243,9 +245,9 @@ class LinComboResultFrame(wx.Frame):
         sview = self.wids['stats'] = dv.DataViewListCtrl(panel, style=DVSTYLE)
         sview.SetFont(self.font_fixedwidth)
         sview.Bind(dv.EVT_DATAVIEW_SELECTION_CHANGED, self.onSelectFitStat)
-        sview.AppendTextColumn(' Fit #', width=65)
-        sview.AppendTextColumn(' N_vary', width=80)
-        sview.AppendTextColumn(' N_eval', width=80)
+        sview.AppendTextColumn(' Fit #', width=70)
+        sview.AppendTextColumn(' N_vary', width=75)
+        sview.AppendTextColumn(' N_eval', width=75)
         sview.AppendTextColumn(' \u03c7\u00B2', width=100)
         sview.AppendTextColumn(' \u03c7\u00B2_reduced', width=100)
         sview.AppendTextColumn(' R Factor', width=100)
@@ -263,7 +265,7 @@ class LinComboResultFrame(wx.Frame):
 
         irow += 1
         title = SimpleText(panel, '[[Fit Statistics]]', font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
         sizer.Add(title, (irow, 0), (1, 4), LEFT)
 
         irow += 1
@@ -274,7 +276,7 @@ class LinComboResultFrame(wx.Frame):
 
         irow += 1
         title = SimpleText(panel, '[[Weights]]', font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
         sizer.Add(title, (irow, 0), (1, 4), LEFT)
         self.wids['weightspanel'] = ppan = wx.Panel(panel)
 
@@ -311,6 +313,10 @@ class LinComboResultFrame(wx.Frame):
 
     def add_results(self, dgroup, form=None, larch_eval=None, show=True):
         name = dgroup.filename
+        #         fitspace = ARRAYS.get(self.datagroup.lcf_result[0].arrayname, 'unknown')
+        #         if fitspace in (None, 'None', 'unknown'):
+        #             return
+        #         name = f'{dgroup.filename} , {fitspace}'
         if name not in self.filelist.GetItems():
             self.filelist.Append(name)
         self.datasets[name] = dgroup
@@ -362,7 +368,7 @@ class LinComboResultFrame(wx.Frame):
         wview = self.wids['weights'] = dv.DataViewListCtrl(wpan, style=DVSTYLE)
         wview.SetFont(self.font_fixedwidth)
         wview.Bind(dv.EVT_DATAVIEW_SELECTION_CHANGED, self.onSelectFitParam)
-        wview.AppendTextColumn(' Fit #', width=65)
+        wview.AppendTextColumn(' Fit #', width=70)
         wview.AppendTextColumn(' E shift', width=80)
 
         for i, cname in enumerate(form['comp_names']):
@@ -429,6 +435,7 @@ class LinComboResultFrame(wx.Frame):
             self.wids['params'].AppendItem(tuple(args))
 
     def onPlotOne(self, evt=None):
+        self.parent.controller.set_datatask_name(self.parent.title)
         self.form = self.mainpanel.read_form()
         self.form['show_fitrange'] = self.wids['show_fitrange'].GetValue()
         self.form['win'] = int(self.wids['plot_win'].GetStringSelection())
@@ -439,6 +446,7 @@ class LinComboResultFrame(wx.Frame):
     def onPlotSel(self, evt=None):
         if self.form is None or self.larch_eval is None:
             return
+        self.parent.controller.set_datatask_name(self.parent.title)
         self.form['show_fitrange'] = self.wids['show_fitrange'].GetValue()
         self.form['win'] = int(self.wids['plot_win'].GetStringSelection())
         form = self.form
@@ -450,9 +458,13 @@ class LinComboResultFrame(wx.Frame):
         if form['arrayname'] == 'flat':
             form['plotopt'] = 'show_flat=True'
 
-        erange = form['ehi'] - form['elo']
-        form['pemin'] = 10*int( (form['elo'] - 5 - erange/4.0) / 10.0)
-        form['pemax'] = 10*int( (form['ehi'] + 5 + erange/4.0) / 10.0)
+        elo, ehi = form['elo'], form['ehi']
+        if elo > dgroup.energy.min():
+            elo, ehi = elo - dgroup.e0, ehi - dgroup.e0
+
+        erange = ehi - elo
+        form['pemin'] = 10*int((elo - 5 - erange/4.0) / 10.0)
+        form['pemax'] = 10*int((ehi + 5 + erange/4.0) / 10.0)
 
         cmds = ["""plot_mu({group:s}, {plotopt:s}, delay_draw=True, label='data',
         emin={pemin:.1f}, emax={pemax:.1f}, title='{filename:s}', win={win:d})"""]
@@ -559,12 +571,10 @@ class LinComboResultFrame(wx.Frame):
 
         label = ['fit #', 'n_varys', 'n_eval', 'chi2',
                   'chi2_reduced', 'akaike_info', 'bayesian_info']
-        label.extend(form['comp_names'])
-        label.append('Total')
-        for i in range(len(label)):
-            if len(label[i]) < 13:
-                label[i] = (" %s                " % label[i])[:13]
-        label = ' '.join(label)
+        for name in form['comp_names']:
+            label.extend([name, f'{name}_stderr'])
+        label.extend(['Total', 'Total_stderr'])
+        label = ' '.join([f'{l:17s}' for l in label])
 
         out = []
         for i, res in enumerate(results):
@@ -572,10 +582,12 @@ class LinComboResultFrame(wx.Frame):
             for attr in ('nvarys', 'nfev', 'chisqr', 'redchi', 'aic', 'bic'):
                 dat.append(getattr(res.result, attr))
             for cname in form['comp_names'] + ['total']:
-                val = 0.0
+                val, std = 0.0, 0.0
                 if cname in res.params:
                     val = res.params[cname].value
+                    std = res.params[cname].stderr
                 dat.append(val)
+                dat.append(std)
             out.append(dat)
 
         out = np.array(out).transpose()
@@ -629,8 +641,9 @@ class LinComboResultFrame(wx.Frame):
         label = [('Data Set' + ' '*25)[:25],
                  'n_varys', 'chi-square',
                  'chi-square_red', 'akaike_info', 'bayesian_info']
-        label.extend(form['comp_names'])
-        label.append('Total')
+        for name in form['comp_names']:
+            label.extend([name, f'{name}_stderr'])
+        label.extend(['Total', 'Total_stderr'])
         for i in range(len(label)):
             if len(label[i]) < 12:
                 label[i] = (" %s                " % label[i])[:12]
@@ -646,10 +659,12 @@ class LinComboResultFrame(wx.Frame):
             for attr in ('nvarys', 'chisqr', 'redchi', 'aic', 'bic'):
                 dat.append(gformat(getattr(res.result, attr), 10))
             for cname in form['comp_names'] + ['total']:
-                val = 0
+                val, std = 0.0, 0.0
                 if cname in res.params:
                     val = res.params[cname].value
+                    std = res.params[cname].stderr
                 dat.append(gformat(val, 10))
+                dat.append(gformat(std, 10))
             out.append(', '.join(dat))
         out.append('')
 
@@ -732,12 +747,12 @@ class LinearComboPanel(TaskPanel):
         add_text('Build Model : ')
         panel.Add(wids['add_selected'], dcol=4)
 
-        collabels = [' File /Group Name   ', 'weight', 'min', 'max']
+        collabels = [' File/Group Name   ', 'weight', 'min', 'max']
         colsizes = [325, 100, 100, 100]
         coltypes = ['str', 'float:12,4', 'float:12,4', 'float:12,4']
         coldefs  = ['', 1.0/MAX_COMPONENTS, 0.0, 1.0]
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
         wids['table'] = DataTableGrid(panel, nrows=MAX_COMPONENTS,
                                       collabels=collabels,
                                       datatypes=coltypes, defaults=coldefs,
@@ -808,10 +823,11 @@ class LinearComboPanel(TaskPanel):
 
     def onFitSpace(self, evt=None):
         fitspace = self.wids['fitspace'].GetStringSelection()
-        self.update_config(dict(fitspace=fitspace))
-
         arrname = Linear_ArrayChoices.get(fitspace, 'norm')
-        self.update_fit_xspace(arrname)
+        self.update_config({'fitspace': fitspace})
+
+        form = self.read_form()
+        self.update_fit_xspace(arrname, grouplist=form['comp_names'])
         self.plot()
 
     def onComponent(self, evt=None, comp=None):
@@ -838,7 +854,7 @@ class LinearComboPanel(TaskPanel):
             self.wids["compval_%2.2d" % n].SetValue(weight)
 
 
-    def fill_form(self, dgroup):
+    def fill_form(self, dgroup, initial=False):
         """fill in form from a data group"""
         opts = self.get_config(dgroup, with_erange=True)
         self.dgroup = dgroup
@@ -952,7 +968,6 @@ class LinearComboPanel(TaskPanel):
         if len(groupname) == 0:
             print("no group to fit?")
             return
-
         script = """# do LCF for {gname:s}
 lcf_result = {func:s}({gname:s}, [{comps:s}],
             xmin={elo:.4f}, xmax={ehi:.4f},
@@ -1006,6 +1021,7 @@ lcf_result = {func:s}({gname:s}, [{comps:s}],
         self.skip_process = False
 
     def plot(self, dgroup=None, with_fit=False):
+        self.controller.set_datatask_name(self.title)
         if self.skip_plotting:
             return
 

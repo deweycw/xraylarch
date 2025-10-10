@@ -14,9 +14,9 @@ import wx.lib.scrolledpanel as scrolled
 from larch import Group
 from larch.wxlib import (BitmapButton, SetTip, GridPanel, FloatCtrl,
                          FloatSpin, FloatSpinWithPin, get_icon, SimpleText,
-                         pack, Button, HLine, Choice, Check, MenuItem,
-                         GUIColors, CEN, LEFT, FRAMESTYLE, Font, FileSave,
-                         FileOpen, FONTSIZE, FONTSIZE_FW, DataTableGrid)
+                         pack, Button, HLine, Choice, Check, MenuItem, Popup,
+                         CEN, LEFT, FRAMESTYLE, FileSave, GUI_COLORS,
+                         FileOpen, DataTableGrid, get_font)
 
 from larch.xafs import etok, ktoe
 from larch.utils import group2dict
@@ -210,15 +210,18 @@ class TaskPanel(wx.Panel):
         self.larch = controller.larch
         self.title = 'Generic Panel'
         self.configname = panel
+        if panel in LARIX_PANELS:
+            self.title = LARIX_PANELS[panel].title
+            self.desc  = LARIX_PANELS[panel].desc
 
         self.wids = {}
         self.subframes = {}
         self.command_hist = []
-        self.SetFont(Font(FONTSIZE))
-        self.titleopts = dict(font=Font(FONTSIZE+2),
-                              colour='#AA0000', style=LEFT)
+        self.SetFont(get_font())
+        self.titleopts = {'font': get_font(larger=1),
+                          'colour': GUI_COLORS.title_red, 'style': LEFT}
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = get_font(fixed_width=True)
 
         self.panel = GridPanel(self, ncols=7, nrows=10, pad=2, itemstyle=LEFT)
         self.panel.sizer.SetVGap(5)
@@ -256,7 +259,7 @@ class TaskPanel(wx.Panel):
         self.elo_wids = self.add_floatspin('elo', value=elo, **opts)
         self.ehi_wids = self.add_floatspin('ehi', value=ehi, **opts)
 
-    def update_fit_xspace(self, arrayname):
+    def update_fit_xspace(self, arrayname, grouplist=None):
         fit_xspace = 'e'
         if arrayname.startswith('chi'):
             fit_xspace = 'r' if 'r' in arrayname else 'k'
@@ -266,15 +269,34 @@ class TaskPanel(wx.Panel):
 
         if self.fit_xspace == 'e' and fit_xspace == 'k': # e to k
             dgroup = self.controller.get_group()
+            self.ensure_xas_processed(dgroup)
             e0 = getattr(dgroup, 'e0', None)
             k  = getattr(dgroup, 'k', None)
-            if e0 is None or k is None:
+            kspace_missing = []
+            if k is None:
+                kspace_missing.append(dgroup)
+            if grouplist is not None:
+                for gname in grouplist:
+                    grp = self.controller.get_group(gname)
+                    self.ensure_xas_processed(grp)
+                    if getattr(grp, 'k', None) is None and grp not in kspace_missing:
+                        kspace_missing.append(grp)
+            if e0 is None or len(kspace_missing) > 0:
+                msg = ["Cannont set fit space to k-space:",
+                       "these groups have chi(k) data"]
+                for g in kspace_missing:
+                    if g is not None:
+                        msg.append(f"    {g.filename}")
+                msg.append("")
+                Popup(self, "\n".join(msg), "Cannot fit in k-space for this data",
+                          style=wx.ICON_WARNING|wx.OK_DEFAULT)
                 return
+
             elo = self.wids['elo'].GetValue()
             ehi = self.wids['ehi'].GetValue()
             self.fit_last_erange = (elo, ehi)
             self.wids['elo'].SetValue(etok(elo-e0))
-            self.wids['ehi'].SetValue(etok(ehi+e0))
+            self.wids['ehi'].SetValue(etok(ehi-e0))
             self.fit_xspace = 'k'
             self.wids['fitspace_label'].SetLabel('Fit Range (1/\u212B):')
         elif self.fit_xspace == 'k' and fit_xspace == 'e': # k to e
@@ -306,14 +328,34 @@ class TaskPanel(wx.Panel):
             self.subframes[name] = frameclass(self, **opts)
 
     def onPanelExposed(self, **kws):
-        # called when notebook is selected
+        # called when notebook is selected: process group
+        self.controller.set_datatask_name(self.title)
         fname = self.controller.filelist.GetStringSelection()
         if fname in self.controller.file_groups:
             gname = self.controller.file_groups[fname]
             dgroup = self.controller.get_group(gname)
-            self.ensure_xas_processed(dgroup)
-            self.fill_form(dgroup)
-            self.process(dgroup=dgroup)
+            if dgroup is not None:
+                try:
+                    if dgroup.datatype == 'xas':
+                        self.ensure_xas_processed(dgroup)
+                    self.fill_form(dgroup)
+                    self.process(dgroup=dgroup)
+                except:
+                    pass
+
+    def onPanelHidden(self, **kws):
+        # called when notebook is de-selected: save config
+        fname = self.controller.filelist.GetStringSelection()
+        if fname in self.controller.file_groups:
+            gname = self.controller.file_groups[fname]
+            dgroup = self.controller.get_group(gname)
+            if dgroup is not None:
+                try:
+                    conf = self.get_config()
+                    conf.update(self.read_form())
+                    setattr(dgroup.config, self.configname, conf)
+                except:
+                    pass
 
     def write_message(self, msg, panel=0):
         self.controller.write_message(msg, panel=panel)
@@ -331,6 +373,10 @@ class TaskPanel(wx.Panel):
         larch = self.controller.larch
         return getattr(larch.input, 'hist_buff',
                        getattr(larch.parent, 'hist_buff', []))
+
+    def larch_has_symbol(self, sym):
+        """does larch have a named symbol"""
+        return self.controller.larch.symtable.has_symbol(sym)
 
     def larch_get(self, sym):
         """get value from larch symbol table"""
@@ -374,7 +420,7 @@ class TaskPanel(wx.Panel):
             if k not in conf:
                 conf[k] = v
 
-        if dgroup is not None and with_erange:
+        if dgroup is not None and with_erange and hasattr(dgroup, 'energy'):
             _emin = min(dgroup.energy)
             _emax = max(dgroup.energy)
             if not hasattr(dgroup, 'e0'):
@@ -401,7 +447,7 @@ class TaskPanel(wx.Panel):
         if dgroup is not None:
             setattr(dgroup.config, self.configname, conf)
 
-    def fill_form(self, dat):
+    def fill_form(self, dat, initial=False):
         if isinstance(dat, Group):
             dat = group2dict(dat)
 

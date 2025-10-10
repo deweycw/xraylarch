@@ -16,7 +16,7 @@ np.seterr(all='ignore')
 
 import wx
 import wx.lib.scrolledpanel as scrolled
-
+import wx.grid as wxgrid
 import wx.dataview as dv
 
 from pyshortcuts import uname, fix_varname, fix_filename, gformat
@@ -33,17 +33,17 @@ from larch.utils.jsonutils import encode4js, decode4js
 from larch.inputText import is_complete
 from larch.utils import mkdir, isValidName
 from larch.io.export_modelresult import export_modelresult
-from larch.xafs import feffit_report, feffpath
+from larch.xafs import feffit_report, feffpath, propagate_uncertainties
 from larch.xafs.feffdat import FEFFDAT_VALUES
 from larch.xafs.xafsutils import FT_WINDOWS
 
-from larch.wxlib import (ReportFrame, BitmapButton, FloatCtrl, FloatSpin,
+from larch.wxlib import (ReportFrame, CSVFrame, BitmapButton, FloatCtrl, FloatSpin,
                          SetTip, GridPanel, get_icon, SimpleText, pack,
-                         Button, HLine, Choice, Check, MenuItem, GUIColors,
+                         Button, HLine, Choice, Check, MenuItem,
                          CEN, RIGHT, LEFT, FRAMESTYLE, Font, FONTSIZE,
-                         COLORS, set_color, FONTSIZE_FW, FileSave,
+                         GUI_COLORS, set_color, FONTSIZE_FW, FileSave,
                          FileOpen, flatnotebook, EditableListBox, Popup,
-                         ExceptionPopup)
+                         ExceptionPopup, DataTableGrid)
 
 from larch.wxlib.parameter import ParameterWidgets
 from larch.wxlib.plotter import last_cursor_pos
@@ -158,7 +158,7 @@ _feffit_dataset = feffit_dataset(data={groupname:s}, transform={trans:s},
                                  paths={paths:s})
 _feffit_result = feffit({params}, _feffit_dataset)
 if not hasattr({groupname:s}, 'feffit_history'): {groupname}.feffit_history = []
-{groupname:s}.feffit_history.insert(0, _feffit_result)
+{groupname:s}.feffit_history.insert(0, deepcopy(_feffit_result))
 """
 
 COMMANDS['path2chi'] = """# generate chi(k), chi(R), and chi(q) for each path
@@ -219,7 +219,7 @@ class ParametersModel(dv.DataViewIndexListModel):
                     continue
                 ptype = 'vary'
                 if not par.vary:
-                    pytype = 'fixed'
+                    ptype = 'fixed'
                 if getattr(par, 'skip', None) not in (False, None):
                     ptype = 'skip'
                 par.skip = ptype == 'skip'
@@ -229,7 +229,7 @@ class ParametersModel(dv.DataViewIndexListModel):
                     value = 'INVALID  '
                 if par.expr is not None:
                     ptype = 'constraint'
-                    value = "%s := %s" % (value, par.expr)
+                    value = f"{value} := {par.expr}"
                 sel = pname in self.selected
                 self.data.append([pname, sel, ptype, value])
         self.Reset(len(self.data))
@@ -264,13 +264,13 @@ class ParametersModel(dv.DataViewIndexListModel):
         """set row/col attributes (color, etc)"""
         ptype = self.data[row][2]
         if ptype == 'vary':
-            attr.SetColour('#000000')
+            attr.SetColour(GUI_COLORS.text)
         elif ptype == 'fixed':
-            attr.SetColour('#AA2020')
+            attr.SetColour(GUI_COLORS.title_blue)
         elif ptype == 'skip':
-            attr.SetColour('#50AA50')
+            attr.SetColour(GUI_COLORS.text_unused)
         else:
-            attr.SetColour('#2010BB')
+            attr.SetColour(GUI_COLORS.title_red)
         return True
 
 class EditParamsFrame(wx.Frame):
@@ -286,9 +286,9 @@ class EditParamsFrame(wx.Frame):
         self.paramgroup = paramgroup
 
         spanel = scrolled.ScrolledPanel(self, size=(500, 275))
-        spanel.SetBackgroundColour('#EEEEEE')
+        spanel.SetBackgroundColour(GUI_COLORS.text_bg)
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
 
         self.dvc = dv.DataViewCtrl(spanel, style=DVSTYLE)
         self.dvc.SetFont(self.font_fixedwidth)
@@ -452,7 +452,7 @@ class FeffitParamsPanel(wx.Panel):
         def SLabel(label, size=(80, -1), **kws):
             return  SimpleText(panel, label, size=size, style=wx.ALIGN_LEFT, **kws)
 
-        panel.Add(SLabel("Feffit Parameters ", colour='#0000AA', size=(200, -1)), dcol=2)
+        panel.Add(SLabel("Feffit Parameters ", colour=GUI_COLORS.title_blue, size=(200, -1)), dcol=2)
         panel.Add(Button(panel, 'Edit Parameters', action=self.onEditParams),  dcol=2)
         panel.Add(Button(panel, 'Force Refresh', action=self.Rebuild),         dcol=3)
 
@@ -582,7 +582,7 @@ class FeffitParamsPanel(wx.Panel):
 class FeffPathPanel(wx.Panel):
     """Feff Path """
     def __init__(self, parent, feffit_panel, filename, title, user_label,
-                 geomstr, absorber, shell, reff, nleg, degen,
+                 geomstr, geometry, absorber, shell, reff, nleg, degen,
                  par_amp, par_e0, par_delr, par_sigma2, par_third, par_ei):
 
         self.parent = parent
@@ -593,7 +593,7 @@ class FeffPathPanel(wx.Panel):
 
         wx.Panel.__init__(self, parent, -1, size=(550, 250))
         self.SetFont(Font(FONTSIZE))
-        panel = GridPanel(self, ncols=4, nrows=4, pad=2, itemstyle=LEFT)
+        panel = GridPanel(self, pad=2, itemstyle=LEFT)
 
         self.fullpath = filename
         pfile = Path(filename).absolute()
@@ -605,7 +605,6 @@ class FeffPathPanel(wx.Panel):
         self.nleg = nleg
         self.reff = reff
         self.geomstr = geomstr
-        # self.geometry = geometry
 
         def SLabel(label, size=(80, -1), **kws):
             return  SimpleText(panel, label, size=size, style=LEFT, **kws)
@@ -618,9 +617,9 @@ class FeffPathPanel(wx.Panel):
                            ('sigma2', par_sigma2),
                            ('third',  par_third),
                            ('ei',  par_ei)):
-            self.wids[name] = wx.TextCtrl(panel, -1, size=(250, -1),
+            self.wids[name] = wx.TextCtrl(panel, -1, size=(225, -1),
                                           value=expr, style=wx.TE_PROCESS_ENTER)
-            wids[name+'_val'] = SimpleText(panel, '', size=(150, -1), style=LEFT)
+            wids[name+'_val'] = SimpleText(panel, '', size=(125, -1), style=LEFT)
 
         wids['use'] = Check(panel, default=True, label='Use in Fit?', size=(100, -1))
         wids['del'] = Button(panel, 'Remove This Path', size=(150, -1),
@@ -632,11 +631,31 @@ class FeffPathPanel(wx.Panel):
                  5: 'Quadruple'}.get(nleg, f'{nleg-1:d}-atom')
         scatt = scatt + ' Scattering'
 
-
         title1 = f'{dirname:s}: {feffdat_file:s}  {absorber:s} {shell:s} edge'
-        title2 = f'Reff={reff:.4f},  Degen={degen:.1f}, {scatt:s}: {geomstr:s}'
+        title2 = f'Reff={reff:.4f},  Degen={degen:.1f}, {scatt:s}'
 
-        panel.Add(SLabel(title1, size=(375, -1), colour='#0000AA'),
+        wids['pathgeom'] = DataTableGrid(panel, nrows=len(geometry),  rowlabelsize=30,
+                                   collabels=['length(A)', 'Atom', 'Angle(deg)'],
+                                   datatypes=['str', 'str', 'str'],
+                                   colsizes=[80, 50, 80],
+                                   defaults=['', '', ''], cornerlabel='leg')
+
+
+        gdata = []
+        for sym, ipot, dist, x, y, z, beta, eta in geometry:
+            scat = f'[{sym}]' if  ipot==0 else sym
+            gdata.append([f'{dist:6.4f}', scat, f'{beta:4.0f}'])
+
+        for icol in range(3):
+            attr = wxgrid.GridCellAttr()
+            attr.SetAlignment(wx.ALIGN_RIGHT, wx.ALIGN_CENTRE)
+            wids['pathgeom'].SetColAttr(icol, attr)
+
+        wids['pathgeom'].table.data = gdata
+        wids['pathgeom'].table.View.Refresh()
+        geom_title = f'Path Geometry: ([{absorber}] = absober)'
+
+        panel.Add(SLabel(title1, size=(325, -1), colour=GUI_COLORS.title_blue),
                   dcol=2,  style=wx.ALIGN_LEFT, newrow=True)
         panel.Add(wids['use'])
         panel.Add(wids['del'])
@@ -651,6 +670,8 @@ class FeffPathPanel(wx.Panel):
         panel.AddMany((SLabel('sigma2'),    wids['sigma2'], wids['sigma2_val']),newrow=True)
         panel.AddMany((SLabel('third'),     wids['third'],  wids['third_val']), newrow=True)
         panel.AddMany((SLabel('Eimag'),     wids['ei'],     wids['ei_val']),    newrow=True)
+        panel.Add(SLabel(geom_title, size=(245, -1)), irow=3, icol=3, dcol=1, style=wx.ALIGN_LEFT)
+        panel.Add(wids['pathgeom'], irow=4, icol=3, dcol=3, drow=7)
         panel.pack()
         sizer= wx.BoxSizer(wx.VERTICAL)
         sizer.Add(panel, 1, LEFT|wx.GROW|wx.ALL, 2)
@@ -703,15 +724,17 @@ class FeffPathPanel(wx.Panel):
             try:
                 value = _eval.eval(expr, show_errors=False, raise_errors=False)
                 if value is not None:
-                    value = gformat(value, 11)
-                    self.wids[name + '_val'].SetLabel(f'= {value}')
+                    value = gformat(value, 10)
+                    self.wids[name + '_val'].SetLabel(f'={value}')
             except:
                 result = False
 
         if result:
-            bgcol, fgcol = 'white', 'black'
+            fgcol = GUI_COLORS.text
+            bgcol = GUI_COLORS.text_bg
         else:
-            bgcol, fgcol = '#AAAA4488', '#AA0000'
+            fgcol = GUI_COLORS.text_invalid
+            bgcol = GUI_COLORS.text_invalid_bg
         self.wids[name].SetForegroundColour(fgcol)
         self.wids[name].SetBackgroundColour(bgcol)
         self.wids[name].SetOwnBackgroundColour(bgcol)
@@ -720,6 +743,7 @@ class FeffPathPanel(wx.Panel):
 
 
     def onPlotFeffDat(self, event=None):
+        self.feffit_panel.controller.set_datatask_name('Feff.dat')
         cmd = f"plot_feffdat(_feffpaths['{self.title}'], title='Feff data for path {self.title}')"
         self.feffit_panel.larch_eval(cmd)
 
@@ -765,7 +789,23 @@ class FeffitPanel(TaskPanel):
     def onPanelExposed(self, **kws):
         # called when notebook is selected
         dgroup = self.controller.get_group()
-        try:
+        if dgroup is None:
+            return
+
+        fit_hist = getattr(dgroup, 'feffit_history', None)
+        print("Panel Exposed ", dgroup, fit_hist)
+        params, paths = None, None
+        if isinstance(fit_hist, list):
+            fit_ret = fit_hist[0]
+            try:
+                dset = fit_ret.datasets[0]
+                params = fit_ret.params
+                paths = dset.paths
+            except Exception:
+                pass
+            print('Feffit History: nfit_hist, npaths, nparams = ', len(fit_hist), len(paths), len(params))
+
+        if True: # try:
             pargroup = self.get_paramgroup()
             self.params_panel.update()
             fname = self.controller.filelist.GetStringSelection()
@@ -774,27 +814,8 @@ class FeffitPanel(TaskPanel):
             if not hasattr(dgroup, 'chi'):
                 self.parent.process_exafs(dgroup)
             self.fill_form(dgroup)
-        except:
-            pass # print(" Cannot Fill feffit panel from group ")
-        if dgroup is not self.dgroup:
-            # setting up feffit for this group
-            self.dgroup = dgroup
-            try:
-                has_fit_hist = len(self.dgroup.feffit_history) > 0
-            except:
-                has_fit_hist = getattr(self.larch.symtable, '_feffit_dataset', None) is not None
-
-            if has_fit_hist:
-                self.wids['show_results'].Enable()
-
-
-            feffpaths = getattr(self.larch.symtable, '_feffpaths', None)
-            if feffpaths is not None:
-                self.reset_paths()
-
-            self.params_panel.update()
-            self.skip_unused_params()
-            self.params_need_update = False
+        else: # except:
+            print("Cannot Fill feffit panel from group ")
 
     def build_display(self):
         self.paths_nb = flatnotebook(self, {}, on_change=self.onPathsNBChanged,
@@ -803,10 +824,8 @@ class FeffitPanel(TaskPanel):
         self.params_panel = FeffitParamsPanel(parent=self.paths_nb,
                                               feffit_panel=self)
         self.paths_nb.AddPage(self.params_panel, ' Parameters ', True)
-        pan = self.panel # = GridPanel(self, ncols=4, nrows=4, pad=2, itemstyle=LEFT)
-
+        pan = self.panel
         self.wids = wids = {}
-
         fsopts = dict(digits=2, increment=0.1, with_pin=True)
 
         fit_kmin = self.add_floatspin('fit_kmin',  value=2, **fsopts)
@@ -858,10 +877,12 @@ class FeffitPanel(TaskPanel):
                                        action=self.onPlot)
         wids['plot_current']  = Button(pan,'Plot Current Model',
                                      action=self.onPlot,  size=(175, -1))
+        wids['copy_exafs']  = Button(pan,'Copy from EXAFS Panel',
+                                     action=self.onCopyEXAFS,  size=(175, -1))
 
         wids['refine_bkg'] = Check(pan, default=False,
                                    label='Refine Background during Fit?')
-        wids['do_fit']        = Button(pan, 'Fit Data to Model',
+        wids['do_fit']        = Button(pan, 'Fit Model to Data',
                                       action=self.onFitModel,  size=(175, -1))
         wids['show_results']  = Button(pan, 'Show Fit Results',
                                       action=self.onShowResults,  size=(175, -1))
@@ -871,9 +892,9 @@ class FeffitPanel(TaskPanel):
             pan.Add(SimpleText(pan, text), dcol=dcol, newrow=newrow)
 
         pan.Add(SimpleText(pan, 'Feff Fitting',
-                           size=(150, -1), **self.titleopts), style=LEFT, dcol=1)
+                           size=(200, -1), **self.titleopts), style=LEFT, dcol=1)
         pan.Add(SimpleText(pan, 'Use Feff->Browse Feff Calculations to Add Paths',
-                           size=(425, -1)), style=LEFT, dcol=4)
+                           size=(200, -1)), style=LEFT, dcol=4)
 
         add_text('Fitting Space: ')
         pan.Add(wids['fit_space'])
@@ -895,7 +916,7 @@ class FeffitPanel(TaskPanel):
         pan.Add(fit_rmin)
         add_text('R max: ', newrow=False)
         pan.Add(fit_rmax)
-        add_text('  ', newrow=True)
+        pan.Add(wids['copy_exafs'], newrow=True)
         pan.Add(wids['refine_bkg'], dcol=3)
 
         pan.Add(HLine(pan, size=(600, 2)), dcol=6, newrow=True)
@@ -931,10 +952,11 @@ class FeffitPanel(TaskPanel):
         pan.pack()
 
         sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add((5, 5), 0, LEFT, 3)
         sizer.Add(pan, 0, LEFT, 3)
-        sizer.Add((3, 3), 0, LEFT, 3)
+        sizer.Add((5, 5), 0, LEFT, 3)
         sizer.Add(SimpleText(self, ' Parameters and Paths'), 0, LEFT, 2)
-        sizer.Add((3, 3), 0, LEFT, 3)
+        sizer.Add((5, 5), 0, LEFT, 3)
         sizer.Add(self.paths_nb,  1, LEFT|wx.GROW, 5)
         pack(self, sizer)
 
@@ -954,8 +976,7 @@ class FeffitPanel(TaskPanel):
 
         if rmin < (rbkg-0.025) and not self.rmin_warned:
             self.rmin_warned = True
-            Popup(self,
-                  f"""Rmin={rmin:.3f} Ang is below Rbkg={rbkg:.3f} Ang.
+            Popup(self, f"""Rmin={rmin:.3f} Ang is below Rbkg={rbkg:.3f} Ang.
 
                   This should be done with caution.""",
                   "Warning: Rmin < Rbkg",
@@ -977,7 +998,7 @@ class FeffitPanel(TaskPanel):
             dgroup = self.controller.get_group()
         if dgroup is None:
             conf = None
-        if not hasattr(dgroup, 'chi'):
+        elif not hasattr(dgroup, 'chi'):
             self.parent.process_exafs(dgroup)
 
         dconf = self.get_defaultconfig()
@@ -986,11 +1007,12 @@ class FeffitPanel(TaskPanel):
             return dconf
         if not hasattr(dgroup, 'config'):
             dgroup.config = Group()
-
+        #print(f"Get Config dconf {dconf.keys()}")
         conf = getattr(dgroup.config, self.configname, dconf)
         for k, v in dconf.items():
             if k not in conf:
                 conf[k] = v
+        # print(f"Get Config conf {conf.keys()}")
 
         econf = getattr(dgroup.config, 'exafs', {})
         for key in ('fit_kmin', 'fit_kmax', 'fit_dk',
@@ -1005,12 +1027,30 @@ class FeffitPanel(TaskPanel):
         self.config_saved = conf
         return conf
 
+    def onCopyEXAFS(self, action=None, **kws):
+        dgroup = self.controller.get_group()
+        econf = getattr(dgroup.config, 'exafs', {})
+        for key in ('kmin', 'kmax', 'kwindow', 'dk',
+                    'rmin', 'rmax'):
+            val = econf.get(f'fft_{key}', None)
+            if val is not None:
+                dgroup.config['feffit'][f'fit_{key}'] = val
+                if 'win' in key:
+                    self.wids[f'fit_{key}'].SetStringSelection(val)
+                else:
+                    self.wids[f'fit_{key}'].SetValue(val)
+        kweight = str(econf.get(f'fft_kweight', 2))
+        self.wids['fit_kwstring'].SetStringSelection(kweight)
+
+
     def process(self, dgroup=None, **kws):
-        # print("Feffit Panel Process ", dgroup, time.ctime())
+        # # print("Feffit Panel Process ", dgroup, time.ctime())
         if dgroup is None:
             dgroup = self.controller.get_group()
 
         conf = self.get_config(dgroup=dgroup)
+        # print(f"Process Get Config conf {conf.keys()} / {kws=}")
+
         conf.update(kws)
 
         if self.params_need_update:
@@ -1019,6 +1059,7 @@ class FeffitPanel(TaskPanel):
             self.params_need_update = False
 
         opts = self.read_form(dgroup=dgroup)
+        # print(f"feffit process : {opts=}")
         if dgroup is not None:
             self.dgroup = dgroup
             for attr in ('fit_kmin', 'fit_kmax', 'fit_dk', 'fit_rmin',
@@ -1045,6 +1086,8 @@ class FeffitPanel(TaskPanel):
 
             cmds = []
             _feffit_dataset = getattr(self.larch.symtable, '_feffit_dataset', None)
+            cmds.append(COMMANDS['feffit_trans'].format(**conf))
+
             if _feffit_dataset is None:
                 cmds.append(COMMANDS['feffit_dataset_init'])
             if has_data:
@@ -1057,15 +1100,15 @@ class FeffitPanel(TaskPanel):
                 cmds.append(COMMANDS['xft'].format(groupname=dgroup.groupname, **ftargs))
                 cmds.append(f"_feffit_dataset.set_datagroup({dgroup.groupname})")
                 cmds.append(f"_feffit_dataset.refine_bkg = {opts['refine_bkg']}")
-            cmds.append(COMMANDS['feffit_trans'].format(**conf))
-
 
             self.larch.eval('\n'.join(cmds))
         return opts
 
-    def fill_form(self, dat):
-        dgroup = self.controller.get_group()
-        conf = self.get_config(dat)
+    def fill_form(self, dgroup=None, initial=False):
+        if dgroup is None:
+            dgroup = self.controller.get_group()
+        conf = self.get_config(dgroup)
+        # print(f"Fill Form {conf=}")
 
         for attr in ('fit_kmin', 'fit_kmax', 'fit_rmin', 'fit_rmax', 'fit_dk'):
             self.wids[attr].SetValue(conf[attr])
@@ -1082,6 +1125,20 @@ class FeffitPanel(TaskPanel):
             if conf['fit_kwstring'] == val:
                 self.wids['fit_kwstring'].SetStringSelection(key)
 
+        try:
+            has_fit_hist = len(dgroup.feffit_history) > 0
+        except:
+            has_fit_hist = getattr(self.larch.symtable, '_feffit_dataset', None) is not None
+        self.wids['show_results'].Enable(has_fit_hist)
+
+        feffpaths = getattr(self.larch.symtable, '_feffpaths', None)
+        if feffpaths is not None:
+            self.reset_paths()
+
+        self.params_panel.update()
+        self.skip_unused_params()
+        self.params_need_update = False
+
     def read_form(self, dgroup=None):
         "read form, returning dict of values"
 
@@ -1097,7 +1154,7 @@ class FeffitPanel(TaskPanel):
             gname = dgroup.groupname
             fname = dgroup.filename
 
-        form_opts = {'datagroup': dgroup, 'groupname': gname, 'filename': fname}
+        form_opts = {'groupname': gname, 'filename': fname}
         wids = self.wids
 
         for attr in ('fit_kmin', 'fit_kmax', 'fit_rmin', 'fit_rmax', 'fit_dk'):
@@ -1153,7 +1210,7 @@ class FeffitPanel(TaskPanel):
     def onPlot(self, evt=None, dataset_name='_feffit_dataset',
                pargroup_name='_feffit_params', title=None, build_fitmodel=True,
                topwin=None, **kws):
-
+        self.controller.set_datatask_name(self.title)
         dataset = getattr(self.larch.symtable, dataset_name, None)
         if dataset is None:
             dgroup = self.controller.get_group()
@@ -1175,7 +1232,7 @@ class FeffitPanel(TaskPanel):
 
         model_name = dataset_name + '.model'
         paths_name = dataset_name + '.paths'
-        paths = self.larch.eval(paths_name)
+        # paths = self.larch.eval(paths_name)
 
         data_name  = dataset_name + '.data'
         refine_bkg = getattr(dataset, 'refine_bkg',
@@ -1211,6 +1268,7 @@ class FeffitPanel(TaskPanel):
         self.plot_feffit_result(dataset_name, topwin=topwin, ftargs=ftargs, **opts)
 
     def plot_feffit_result(self, dataset_name, topwin=None, ftargs=None, **kws):
+        self.controller.set_datatask_name(self.title)
 
         if isValidName(dataset_name):
             dataset = getattr(self.larch.symtable, dataset_name, None)
@@ -1225,7 +1283,6 @@ class FeffitPanel(TaskPanel):
         model_name = dataset_name + '.model'
         has_data = getattr(dataset, 'has_data', True)
 
-        #print("plot_feffit_result/ dgroup, dataset: ", dataset_name, dgroup, dataset, has_data)
 
         opts = self.process(dgroup)
         opts.update(**kws)
@@ -1360,6 +1417,7 @@ class FeffitPanel(TaskPanel):
             raise ValueError("cannot get feff cache ")
 
         geomstre = None
+        # print(f"Add Path {pathinfo=}, {feffpath=}")
         if pathinfo is not None:
             absorber = pathinfo.absorber
             shell = pathinfo.shell
@@ -1429,10 +1487,12 @@ class FeffitPanel(TaskPanel):
         if len(par_sigma2) < 1:
             par_sigma2 = f'sigma2_{ptitle}'
 
-        pathpanel = FeffPathPanel(self.paths_nb, self, filename, title,
-                                  user_label, geomstr, absorber, shell,
-                                  reff, nleg, degen, par_amp, par_e0,
-                                  par_delr, par_sigma2, par_third, par_ei)
+        pathpanel = FeffPathPanel(self.paths_nb, self, filename,
+                                  title, user_label, geomstr,
+                                  feffpath.geometry, absorber, shell, reff,
+                                  nleg, degen, par_amp, par_e0,
+                                  par_delr, par_sigma2, par_third,
+                                  par_ei)
 
         self.paths_nb.AddPage(pathpanel, f' {title:s} ', True)
 
@@ -1449,7 +1509,7 @@ class FeffitPanel(TaskPanel):
             if Path(filename).exists():
                 self.larch_eval(COMMANDS['cache_path'].format(**pdat))
             else:
-                print(f"cannot file Feff data file '{filename}'")
+                print(f"cannot find file Feff data file '{filename}'")
 
         self.larch_eval(COMMANDS['use_path'].format(**pdat))
         if resize:
@@ -1527,6 +1587,7 @@ class FeffitPanel(TaskPanel):
 
     def build_fitmodel(self, groupname=None, opts=None):
         """ use fit components to build model"""
+        self.controller.set_datatask_name(self.title)
         paths = []
         cmds = ["### set up feffit "]
         pargroup = self.get_paramgroup()
@@ -1640,8 +1701,8 @@ class FeffitPanel(TaskPanel):
         if dgroup is None:
            dgroup = self.controller.get_group()
         opts = self.build_fitmodel(dgroup)
+        self.controller.set_datatask_name(self.title)
 
-        # dgroup = opts['datagroup']
         fopts = dict(groupname=opts['groupname'],
                      refine_bkg=bool(opts['refine_bkg']),
                      trans='_feffit_trans',
@@ -1651,7 +1712,7 @@ class FeffitPanel(TaskPanel):
         groupname = opts['groupname']
         filename = opts['filename']
         if dgroup is None:
-            dgroup = opts['datagroup']
+            dgroup = self.controller.get_group(groupname)
 
         script.append("###\n### DATA \n###\n")
         script.append(COMMANDS['data_source'].format(groupname=groupname, filename=filename))
@@ -1705,7 +1766,6 @@ class FeffitPanel(TaskPanel):
         if not hasattr(dgroup, 'feffit_history'):
             dgroup.feffit_history = []
 
-
         label = now  = time.strftime("%b-%d %H:%M")
         if len(dgroup.feffit_history) > 0:
             dgroup.feffit_history[0].commands = script
@@ -1726,7 +1786,7 @@ class FeffitPanel(TaskPanel):
         self.write_message("wrote feffit script to '%s'" % sname)
 
         self.show_subframe('feffit_result', FeffitResultFrame,
-                           datagroup=opts['datagroup'], feffit_panel=self)
+                           datagroup=dgroup, feffit_panel=self)
         self.subframes['feffit_result'].add_results(dgroup, form=opts)
 
     def onShowResults(self, event=None):
@@ -1785,11 +1845,10 @@ class FeffitResultFrame(wx.Frame):
             xasgroups = getattr(symtab, '_xasgroups', None)
             if xasgroups is not None:
                 for dname, dgroup in xasgroups.items():
-                    dgroup = getattr(symtab, dgroup, None)
-                    hist = getattr(dgroup, 'feffit_history', None)
-                    if hist is not None:
-                        self.add_results(dgroup, show=True)
-
+                    mgroup = getattr(symtab, dgroup, None)
+                    hist = getattr(mgroup, 'feffit_history', [])
+                    if hist is not None and len(hist) > 0:
+                        self.add_results(mgroup, show=True)
 
     def createMenus(self):
         self.menubar = wx.MenuBar()
@@ -1817,7 +1876,7 @@ class FeffitResultFrame(wx.Frame):
                                         size=(250, -1))
         set_color(self.filelist, 'list_fg', bg='list_bg')
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.NORMAL)
+        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
 
         panel = scrolled.ScrolledPanel(splitter)
 
@@ -1827,11 +1886,11 @@ class FeffitResultFrame(wx.Frame):
         # title row
         self.wids = wids = {}
         title = SimpleText(panel, 'Feffit Results', font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
 
         wids['data_title'] = SimpleText(panel, '< > ', font=Font(FONTSIZE+2),
                                         minsize=(350, -1),
-                                        colour=COLORS['title'], style=LEFT)
+                                        colour=GUI_COLORS.title, style=LEFT)
 
         wids['plot1_op'] = Choice(panel, choices=list(Plot1_Choices.keys()),
                                     action=self.onPlot, size=(125, -1))
@@ -1864,10 +1923,12 @@ class FeffitResultFrame(wx.Frame):
         wids['plot_current']  = Button(panel,'Plot Current Model',
                                      action=self.onPlot,  size=(175, -1))
 
-        wids['show_pathpars']  = Button(panel,'Show Path Parameters',
-                                        action=self.onShowPathParams, size=(175, -1))
+        wids['show_report']  = Button(panel,'Show Fit Report',
+                                        action=self.onShowFitReport, size=(200, -1))
         wids['show_script']  = Button(panel,'Show Fit Script',
-                                        action=self.onShowScript, size=(150, -1))
+                                        action=self.onShowScript, size=(200, -1))
+        wids['show_params']  = Button(panel,'Show CVS Path Params',
+                                        action=self.onShowParamsCSV, size=(200, -1))
 
         lpanel = wx.Panel(panel)
         wids['fit_label'] = wx.TextCtrl(lpanel, -1, ' ', size=(175, -1))
@@ -1909,8 +1970,10 @@ class FeffitResultFrame(wx.Frame):
         sizer.Add(wids['plot2_voff'],         (irow, 3), (1, 1), LEFT)
 
         irow += 1
-        sizer.Add(wids['show_pathpars'], (irow, 0), (1, 1), LEFT)
-        sizer.Add(wids['show_script'],   (irow, 1), (1, 1), LEFT)
+        sizer.Add(wids['show_report'],  (irow, 0), (1, 1), LEFT)
+        sizer.Add(wids['show_script'],  (irow, 1), (1, 1), LEFT)
+        sizer.Add(wids['show_params'],  (irow, 2), (1, 2), LEFT)
+
         irow += 1
         sizer.Add(HLine(panel, size=(650, 3)), (irow, 0), (1, 5), LEFT)
 
@@ -1920,7 +1983,7 @@ class FeffitResultFrame(wx.Frame):
 
         irow += 1
         title = SimpleText(panel, '[[Fit Statistics]]',  font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
         subtitle = SimpleText(panel, ' (most recent fit is at the top)',
                               font=Font(FONTSIZE+1),  style=LEFT)
 
@@ -1957,7 +2020,7 @@ class FeffitResultFrame(wx.Frame):
 
         irow += 1
         title = SimpleText(panel, '[[Variables]]',  font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
         sizer.Add(title, (irow, 0), (1, 1), LEFT)
 
         self.wids['copy_params'] = Button(panel, 'Update Model with these values',
@@ -1991,7 +2054,7 @@ class FeffitResultFrame(wx.Frame):
 
         irow += 1
         title = SimpleText(panel, '[[Correlations]]',  font=Font(FONTSIZE+2),
-                           colour=COLORS['title'], style=LEFT)
+                           colour=GUI_COLORS.title, style=LEFT)
 
         ppanel = wx.Panel(panel)
         ppanel.SetMinSize((450, 20))
@@ -2057,25 +2120,55 @@ class FeffitResultFrame(wx.Frame):
                                             default_filename=default_filename,
                                             wildcard=wildcard)
 
-    def onShowPathParams(self, event=None):
+    def onShowFitReport(self, event=None):
         result = self.get_fitresult()
         if result is None:
             return
-        text = f'# Feffit Report for {self.datagroup.filename} fit "{result.label}"\n'
+
+        needs_uncertainties = False
+        for name, par in result.params.items():
+            if par.stderr is None and (par.vary or
+                                       par.expr not in (None, '', 'None')):
+                needs_uncertainties = True
+        if needs_uncertainties:
+            try:
+                propagate_uncertainties(result, result.datasets)
+            except Exception:
+                pass
+
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
+        text = f'# Feffit Report for {self.datagroup.filename} fit "{label}"\n'
         text = text + feffit_report(result)
-        title = f'Report for {self.datagroup.filename} fit "{result.label}"'
-        fname = fix_filename(f'{self.datagroup.filename}_{result.label}.txt')
+        title = f'Report for {self.datagroup.filename} fit "{label}"'
+        fname = fix_filename(f'{self.datagroup.filename}_{label}.txt')
         self.show_report(text, title=title, default_filename=fname)
+
+    def onShowParamsCSV(self, event=None):
+        result = self.get_fitresult()
+        if result is None:
+            return
+
+        needs_uncertainties = False
+        for name, par in result.params.items():
+            if par.stderr is None and (par.vary or
+                                       par.expr not in (None, '', 'None')):
+                needs_uncertainties = True
+        if needs_uncertainties:
+            propagate_uncertainties(result, result.datasets)
+        dset =  result.datasets[0]
+        CSVFrame(parent=self.parent, csv=dset.csv_path_report(result.params, format=False))
+
 
     def onShowScript(self, event=None):
         result = self.get_fitresult()
         if result is None:
             return
-        text = [f'# Feffit Script for {self.datagroup.filename} fit "{result.label}"']
-        text.extend(result.commands)
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
+        text = [f'# Feffit Script for {self.datagroup.filename} fit "{label}"']
+        text.extend(getattr(result, 'commands', ['no commands found']))
         text = '\n'.join(text)
-        title = f'Script for {self.datagroup.filename} fit "{result.label}"'
-        fname = fix_filename(f'{self.datagroup.filename}_{result.label}.lar')
+        title = f'Script for {self.datagroup.filename} fit "{label}"'
+        fname = fix_filename(f'{self.datagroup.filename}_{label}.lar')
         self.show_report(text, title=title, default_filename=fname,
                          wildcard='Larch/Python Script (*.lar)|*.lar')
 
@@ -2091,8 +2184,9 @@ class FeffitResultFrame(wx.Frame):
         result = self.get_fitresult()
         if result is None:
             return
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
         if wx.ID_YES != Popup(self,
-                              f"Remove fit '{result.label}' from history?\nThis cannot be undone.",
+                              f"Remove fit '{label}' from history?\nThis cannot be undone.",
                               "Remove fit?", style=wx.YES_NO):
                 return
         self.datagroup.feffit_history.pop(self.nfit)
@@ -2103,9 +2197,10 @@ class FeffitResultFrame(wx.Frame):
         result = self.get_fitresult()
         if result is None:
             return
-        dset   = result.datasets[0]
+        dset  = result.datasets[0]
         dgroup = dset.data
 
+        self.feffit_panel.controller.set_datatask_name(self.feffit_panel.title)
         trans  = dset.transform
         dset.prepare_fit(result.params)
         dset._residual(result.params)
@@ -2134,10 +2229,12 @@ class FeffitResultFrame(wx.Frame):
 
 
         result_name  = f'{self.datagroup.groupname}.feffit_history[{self.nfit}]'
-        opts['label'] = f'{result_name}.label'
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
+
+        opts['label'] = label
         opts['filename'] = self.datagroup.filename
         opts['pargroup_name'] = f'{result_name}.paramgroup'
-        opts['title'] = f'{self.datagroup.filename}: {result.label}'
+        opts['title'] = f'{self.datagroup.filename}: {label}'
 
         for attr in ('kmin', 'kmax', 'dk', 'rmin', 'rmax', 'fitspace'):
             opts[attr] = getattr(trans, attr)
@@ -2155,7 +2252,8 @@ class FeffitResultFrame(wx.Frame):
         result = self.get_fitresult()
         if result is None:
             return
-        fname = fix_filename(f'{self.datagroup.filename}_{result.label:s}.lar')
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
+        fname = fix_filename(f'{self.datagroup.filename}_{label:s}.lar')
 
         path = FileSave(self, message='Save text to file',
                         wildcard=wildcard, default_file=fname)
@@ -2171,8 +2269,8 @@ class FeffitResultFrame(wx.Frame):
         result = self.get_fitresult()
         if result is None:
             return
-
-        fname = fix_filename(f'{self.datagroup.filename}_{result.label:s}_{form}')
+        label = getattr(result, 'label', self.wids['fit_label'].GetValue())
+        fname = fix_filename(f'{self.datagroup.filename}_{label:s}_{form}')
         fname = fname.replace('.', '_')
         fname = fname + '.txt'
 
@@ -2185,7 +2283,7 @@ class FeffitResultFrame(wx.Frame):
 
         text = feffit_report(result)
         desc = self.outforms[form]
-        buff = [f'# Results for {self.datagroup.filename} "{result.label}": {desc}']
+        buff = [f'# Results for {self.datagroup.filename} "{label}": {desc}']
 
         for line in text.split('\n'):
             buff.append('# %s' % line)
@@ -2328,26 +2426,25 @@ class FeffitResultFrame(wx.Frame):
             self.datagroup = datagroup
         if larch_eval is not None:
             self.larch_eval = larch_eval
-
         datagroup = self.datagroup
         self.feffit_history = getattr(self.datagroup, 'feffit_history', [])
-
         cur = self.get_fitresult()
         if cur is None:
             return
         wids = self.wids
         wids['stats'].DeleteAllItems()
         for i, res in enumerate(self.feffit_history):
-            args = ["%d" % (i+1), res.label, "%.d" % (len(res.datasets[0].paths))]
+            label = getattr(res, 'label', f'fit {i+1}')
+            args = [f"{i+1}", label, f'{len(res.datasets[0].paths)}']
             for attr in ('nvarys', 'n_independent', 'chi_square',
                          'chi2_reduced', 'rfactor'):
                 val = getattr(res, attr)
                 if isinstance(val, int):
-                    val = '%d' % val
+                    val = f'{val}'
                 elif attr == 'n_independent':
-                    val = "%.2f" % val
+                    val = f'{val:.2f}'
                 else:
-                    val = "%.4f" % val
+                    val = f'{val:.4f}'
                     # val = gformat(val, 9)
                 args.append(val)
             wids['stats'].AppendItem(tuple(args))
@@ -2368,7 +2465,7 @@ class FeffitResultFrame(wx.Frame):
             path_hashkeys.extend([p.hashkey for p in ds.paths.values()])
 
         wids = self.wids
-        wids['fit_label'].SetValue(result.label)
+        wids['fit_label'].SetValue(getattr(result, 'label', f'fit {nfit+1}'))
         wids['data_title'].SetLabel(self.datagroup.filename)
         wids['params'].DeleteAllItems()
         wids['paramsdata'] = []

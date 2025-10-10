@@ -5,7 +5,6 @@ Linear Combination panel
 import os
 import time
 import wx
-import wx.lib.scrolledpanel as scrolled
 import wx.dataview as dv
 
 import numpy as np
@@ -27,7 +26,6 @@ from .config import Linear_ArrayChoices
 
 np.seterr(all='ignore')
 
-DVSTYLE = dv.DV_SINGLE|dv.DV_VERT_RULES|dv.DV_ROW_LINES
 
 # max number of *reported* PCA weights after fit
 MAX_COMPS = 30
@@ -183,7 +181,7 @@ class PCAPanel(TaskPanel):
         self.update_config({'weight_min': wmin})
         # autoset_fs_increment(self.wids['weight_min'], wmin)
 
-    def fill_form(self, dgroup):
+    def fill_form(self, dgroup, initial=False):
         opts = self.get_config(dgroup, with_erange=True)
         self.dgroup = dgroup
 
@@ -229,6 +227,7 @@ class PCAPanel(TaskPanel):
     def plot_pca_weights(self, win=2):
         if self.result is None or self.skip_plotting:
             return
+        self.controller.set_datatask_name(self.title)
         self.larch_eval(f"plot_pca_weights(pca_result, win={win:d})")
         self.controller.set_focus()
 
@@ -236,12 +235,14 @@ class PCAPanel(TaskPanel):
     def plot_pca_components(self, win=1):
         if self.result is None or self.skip_plotting:
             return
+        self.controller.set_datatask_name(self.title)
         self.larch_eval(f"plot_pca_components(pca_result, win={win:d})")
         self.controller.set_focus()
 
     def plot_pca_fit(self, win=1):
         if self.result is None or self.skip_plotting:
             return
+        self.controller.set_datatask_name(self.title)
         dgroup = self.controller.get_group()
         if hasattr(dgroup, 'pca_result'):
             self.larch_eval(f"plot_pca_fit({dgroup.groupname:s}, with_components=True, win={win:d})")

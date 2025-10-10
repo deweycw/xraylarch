@@ -10,7 +10,8 @@ from lmfit import Parameter, Parameters, minimize, fit_report
 
 import uncertainties
 
-from larch import (Group, Make_CallArgs, parse_group_args, isgroup)
+from larch import Group, isgroup
+from larch.larchlib import Make_CallArgs, parse_group_args
 from larch.math import index_of, index_nearest, realimag, remove_dups
 
 from .xafsutils import ETOK, TINY_ENERGY, set_xafsGroup
@@ -38,7 +39,7 @@ def _resid(vcoefs, ncoef, kraw, mu, chi_std, knots, order, kout,
     out =  realimag(xftf_fast(chi*ftwin, nfft=nfft)[:irbkg])
     if nclamp == 0:
         return out
-    scale = 1.0 + 100*(out*out).mean()
+    scale = 0.1 + 10*(out*out).mean()
     return  np.concatenate((out,
                             abs(clamp_lo)*scale*chi[:nclamp],
                             abs(clamp_hi)*scale*chi[-nclamp:]))
@@ -105,7 +106,7 @@ def autobk(energy, mu=None, group=None, rbkg=1, nknots=None, e0=None, ek0=None,
     # passed-in group or from running pre_edge()
     group = set_xafsGroup(group, _larch=_larch)
 
-    if edge_step is None and isgroup(group, 'edge_step'):
+    if edge_step is None and hasattr(group, 'edge_step'):
         edge_step = group.edge_step
     if e0 is not None and ek0 is None:  # command-line e0 still valid
         ek0 = e0
@@ -114,6 +115,7 @@ def autobk(energy, mu=None, group=None, rbkg=1, nknots=None, e0=None, ek0=None,
     if ek0 is None and isgroup(group, 'e0'):
         ek0 = group.e0
 
+    # print(f"AUTOBK {group=}, {ek0=}, {edge_step=}")
     if ek0 is not None and (ek0 < energy.min() or ek0 > energy.max()):
         ek0 = None
     if ek0 is None or edge_step is None:
@@ -288,7 +290,7 @@ def autobk_delta_chi(group, err_sigma=1):
 
 def _lmfit_resid(pars, ncoefs=1, knots=None, order=3, irbkg=1, nfft=2048,
             kraw=None, mu=None, kout=None, ftwin=1, kweight=1, chi_std=None,
-            nclamp=0, clamp_lo=1, clamp_hi=1, **kws):
+            nclamp=0, clamp_lo=0, clamp_hi=0, **kws):
     # coefs = [getattr(pars, FMT_COEF % i) for i in range(ncoefs)]
     coefs = [pars[FMT_COEF % i].value for i in range(ncoefs)]
     bkg, chi = spline_eval(kraw, mu, knots, coefs, order, kout)
@@ -298,7 +300,7 @@ def _lmfit_resid(pars, ncoefs=1, knots=None, order=3, irbkg=1, nfft=2048,
     if nclamp == 0:
         return out
     # spline clamps:
-    scale = 1.0 + 100*(out*out).mean()
+    scale = 0.1 + 10*(out*out).mean()
     return  np.concatenate((out,
                             abs(clamp_lo)*scale*chi[:nclamp],
                             abs(clamp_hi)*scale*chi[-nclamp:]))
@@ -309,7 +311,7 @@ def _lmfit_resid(pars, ncoefs=1, knots=None, order=3, irbkg=1, nfft=2048,
 def autobk_lmfit(energy, mu=None, group=None, rbkg=1, nknots=None, e0=None, ek0=None,
            edge_step=None, kmin=0, kmax=None, kweight=1, dk=0.1,
            win='hanning', k_std=None, chi_std=None, nfft=2048, kstep=0.05,
-           pre_edge_kws=None, nclamp=3, clamp_lo=0, clamp_hi=1,
+           pre_edge_kws=None, nclamp=3, clamp_lo=0, clamp_hi=0,
            calc_uncertainties=True, err_sigma=1, _larch=None, **kws):
     """Use Autobk algorithm to remove XAFS background
 
@@ -336,7 +338,7 @@ def autobk_lmfit(energy, mu=None, group=None, rbkg=1, nknots=None, e0=None, ek0=
       chi_std:   optional chi array for standard chi(k).
       nclamp:    number of energy end-points for clamp [3]
       clamp_lo:  weight of low-energy clamp [0]
-      clamp_hi:  weight of high-energy clamp [1]
+      clamp_hi:  weight of high-energy clamp [0]
       calc_uncertaintites:  Flag to calculate uncertainties in
                             mu_0(E) and chi(k) [True]
       err_sigma: sigma level for uncertainties in mu_0(E) and chi(k) [1]

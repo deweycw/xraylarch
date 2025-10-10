@@ -10,8 +10,8 @@ from xraydb import (xray_edge, xray_line, xray_lines,
                     atomic_number, atomic_symbol)
 from lmfit import Parameter, Parameters, minimize
 
-from larch import Group, isgroup, parse_group_args, Make_CallArgs
-
+from larch import Group, isgroup
+from larch.larchlib import Make_CallArgs, parse_group_args
 from larch.math import index_of, index_nearest, remove_dups, remove_nans2
 
 from .xafsutils import set_xafsGroup, TINY_ENERGY
@@ -256,6 +256,11 @@ def mback_norm(energy, mu=None, group=None, z=None, edge='K', e0=None,
 
     if _larch is not None:
         group = set_xafsGroup(group, _larch=_larch)
+
+    if getattr(group, 'pre_edge_details', None) is None:  # pre_edge never run
+        pre_edge(group, pre1=pre1, pre2=pre2, nvict=nvict,
+                norm1=norm1, norm2=norm2, e0=e0, nnorm=nnorm)
+
     group.norm_poly = group.norm*1.0
 
     if z is not None:              # need to run find_e0:
@@ -273,9 +278,6 @@ def mback_norm(energy, mu=None, group=None, z=None, edge='K', e0=None,
     if atsym is None and z is not None:
         atsym = atomic_symbol(z)
 
-    if getattr(group, 'pre_edge_details', None) is None:  # pre_edge never run
-        pre_edge(group, pre1=pre1, pre2=pre2, nvict=nvict,
-                norm1=norm1, norm2=norm2, e0=e0, nnorm=nnorm)
     if pre1 is None:
         pre1 = group.pre_edge_details.pre1
     if pre2 is None:
@@ -337,10 +339,11 @@ def mback_norm(energy, mu=None, group=None, z=None, edge='K', e0=None,
 
     step_new = pre_f2['edge_step']
 
-    group.edge_step_poly  = group.edge_step
+    group.edge_step_poly = group.edge_step
     group.edge_step_mback = step_new
     group.norm_mback = mu_pre / step_new
-
+    group.edge_step = step_new
+    group.norm = group.norm_mback
 
     group.mback_params = Group(e0=e0, pre1=pre1, pre2=pre2, norm1=norm1,
                                norm2=norm2, nnorm=nnorm, fit_params=p,
@@ -348,7 +351,4 @@ def mback_norm(energy, mu=None, group=None, z=None, edge='K', e0=None,
                                pre_f2=pre_f2, atsym=atsym, edge=edge)
 
     if (abs(step_new - group.edge_step)/(1.e-13+group.edge_step)) > 0.75:
-        print("Warning: mback edge step failed....")
-    else:
-        group.edge_step = step_new
-        group.norm       = group.norm_mback
+        print(f"Warning: suspicious mback results: step was {group.edge_edge:.4f}, now {step_new:.4f}")

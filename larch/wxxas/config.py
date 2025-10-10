@@ -10,6 +10,7 @@ ATSYMS = ['?'] + ATOM_SYMS[:98]
 EDGES  = ['K', 'L3', 'L2', 'L1', 'M5', 'M4', 'M3', 'N7']
 OLDCONF_FILE = 'xas_viewer.conf'
 CONF_FILE = 'larix.conf'
+SESSION_LOCK = 'sessionlock'
 
 wxmplot.config.Themes['fivethirtyeight'].update({'legend.fontsize': 10,
                                                  'xtick.labelsize': 9,
@@ -24,8 +25,9 @@ ARRAYS = {'mu':      'Raw \u03BC(E)',
           'norm':    'Normalized \u03BC(E)',
           'flat':    'Flattened \u03BC(E)',
           'norm+flat':  'Normalized + Flattened \u03BC(E)',
-          'prelines':   '\u03BC(E) + Pre-/Post-edge',
-          'mback_norm': '\u03BC(E) + MBACK  \u03BC(E)',
+          'prelines':  'Pre-/Post-edge Curves',
+          'mback_mu':  'MBACK tabulated \u03BC(E)',
+          'mback_norm': 'MBACK \u03BC(E)',
           'mback_poly': 'MBACK + Poly Normalized',
           'i0': 'I0(E)',
           'norm+i0': 'Normalized \u03BC(E) + I0(E)',
@@ -44,14 +46,16 @@ ARRAYS = {'mu':      'Raw \u03BC(E)',
           'chir_mag+chir_re': '|\u03c7(R)| + Re[\u03c7(R)]',
           'chir_re_chir_im':  'Re[\u03c7(R)] + Im[\u03c7(R)]',
           'chiq':  'Filtered \u03c7(k)',
-          'noplot': '<no plot>',
+          'ydat': 'Raw Y Data',
+          'ynorm': 'Scaled Y Data',
+          'dydx': 'Derivate: dy/dx',
+          'noplot': 'no plot',
           }
 
 # wavelet = 'EXAFS wavelet'
 
 FT_WINDOWS_AUTO = ['<Auto>']
 FT_WINDOWS_AUTO.extend(FT_WINDOWS)
-
 
 def make_array_choice(opts):
     """make (ordered) dict of {Array Description: varname}"""
@@ -62,8 +66,12 @@ def make_array_choice(opts):
     return out
 
 
-Linear_ArrayChoices = make_array_choice(['norm', 'flat', 'dmude', 'chi0', 'chi1', 'chi2'])
+Linear_ArrayChoices = make_array_choice(['norm', 'flat', 'dmude', 'chi0', 'chi1', 'chi2', 'chi3'])
 PrePeak_ArrayChoices = make_array_choice(['norm', 'flat', 'deconv', 'mu'])
+CurveFit_ArrayChoices = make_array_choice(['ydat', 'ynorm', 'norm', 'flat', 'dydx', 'dmude'])
+
+YERR_CHOICES = ('Constant', 'Sqrt(Y)', 'Array')
+XRANGE_CHOICES = ('Full X Range', 'Set X Limits')
 Regress_Choices = ['Partial Least Squares', 'LassoLars']
 
 PlotWindowChoices = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
@@ -73,6 +81,15 @@ NNORM_STRINGS = {int(v): k for k, v in NNORM_CHOICES.items()}
 
 NORM_METHODS = ('polynomial', 'mback')
 PREEDGE_FORMS = {'Constant': 0, 'Linear': 1}
+
+Plot_EnergyRanges = {'full E range': None,
+                     'E0 -10:+50eV':  (-10, 50),
+                     'E0 -20:+80eV':  (-20, 80),
+                     'E0 -30:+120eV': (-30, 120),
+                     'E0 -50:+250eV': (-50, 250),
+                     'E0 -75:+400eV': (-75, 400),
+                     'E0 -100:+500eV': (-100, 500)}
+
 
 ATHENA_CLAMPNAMES = {'none': 0, 'slight': 1, 'weak': 5, 'medium': 20,
                      'strong': 100, 'rigid': 500}
@@ -87,13 +104,15 @@ Feffit_PlotChoices = {'K and R space': 'k+r', 'R space only': 'r'}
 
 Valid_DataTypes = ('string', 'float', 'int', 'bool', 'choice', 'path')
 
-
 AnalysisTab = namedtuple('AnalysisTab', ('title', 'constructor', 'desc'))
 
 LARIX_PANELS = {
     'xydata':
     AnalysisTab('XY Data', 'larch.wxxas.xydata_panel.XYDataPanel',
                 'Read and Manipulate XY Data from Column Data files'),
+    'curvefit':
+    AnalysisTab('Curve Fitting', 'larch.wxxas.curvefit_panel.CurveFitPanel',
+                'General Curve Fitting of XY Data'),
     'xasnorm':
     AnalysisTab('XAS Normalization', 'larch.wxxas.xasnorm_panel.XASNormPanel',
                 'Normalization and Pre-edge subtraction for XANES and EXAFS'),
@@ -117,14 +136,21 @@ LARIX_PANELS = {
                 'EXAFS Path Fitting with FEFF calculations'),
 }
 
+#     'larch_buffer':
+#     AnalysisTab('Larch Buffer', 'larch.wxlib.LarchFrame',
+#                 'Inspect Larch commands and data (separate window)'),
+#     'xrd1d':
+#     AnalysisTab('XRD 1D Viewing', 'larch.wxxrd.xrd1d_display',
+#                'Browse and Search XRD 1D patterns'),
+
 LARIX_MODES = {
     'all': ('All', [k for k  in LARIX_PANELS]),
-    'xydata': ('General XY Data Visualization and Fitting', ('xydata', 'lmfit')),
+    'xydata': ('General XY Data Visualization and Fitting', ('xydata', 'curvefit')),
     'xas': ('XANES and EXAFS', ('xasnorm', 'prepeaks', 'pca', 'lincombo', 'exafs', 'feffit')),
     'exafs': ('EXAFS only', ('xasnorm', 'exafs', 'feffit')),
     'xanes': ('XANES only', ('xasnorm', 'prepeaks', 'pca', 'lincombo')),
-    'xrf': ('XRF Mapping and Analysis', ('maproi', 'mapareas', 'maptomo', 'mapxrf')),
-    'xrd1d': ('XRD 1D', ('xrd1d', )),
+    # 'xrf': ('XRF Mapping and Analysis', ('maproi', 'mapareas', 'maptomo', 'mapxrf')),
+    # 'xrd1d': ('XRD 1D', ('xrd1d', )),
     }
 
 class CVar:
@@ -152,16 +178,19 @@ class CVar:
 ##
 ## sections
 ##
-CONF_SECTIONS = {k:v.desc for k, v in LARIX_PANELS.items()}
-CONF_SECTIONS.update({'main': 'Main program configuration',
-                      'pin': 'Pin icon to select points from plots',
-                      'plot': 'General Plotting',
-                      'autosave': 'Automatic saving of Session files',
-                      })
+CONF_SECTIONS = {'main': 'Main program configuration',
+
+                 'plot': 'Plotting configuration',
+                 'pin': 'Pin icon to select points from plots',
+                 'autosave': 'Automatic saving of Session files',
+                 }
+CONF_SECTIONS.update({k:v.desc for k, v in LARIX_PANELS.items()})
+
 
 main = [CVar('chdir_on_fileopen', True, 'bool', desc='whether to change working directory when opening a file'),
         CVar('workdir', get_homedir(), 'path', desc='starting working directory'),
-        CVar('use_last_workdir', True, 'bool',  desc='whehter to use the working directory of the last session\nor always start in workdir'),
+        CVar('use_last_workdir', True, 'bool',  desc='whether to use the working directory of the last session\nor always start in workdir'),
+        CVar('show_larch_buffer', False, 'bool',  desc='whether to show the Larch Buffer with data and commands on startup'),
         ]
 
 autosave = [CVar('savetime', 900, 'int', min=1, step=30, desc='time (in sec) between auto-saving Session files'),
@@ -177,16 +206,16 @@ pin = [CVar('style', 'pin first', 'choice', choices=['pin first', 'plot first'],
            desc='maximum time (seconds) after clicking on the pin to click on plot.\nWill report last saved value')]
 
 
-
-plot = [CVar('theme', '<Auto>', 'choice', choices=PLOT_THEMES,
-            desc='plotting theme for colors and "look and feel"'),
-        CVar('height', 550, 'int', min=100, desc='height of main plot window (in pixels)'),
-        CVar('width', 600, 'int', min=100, desc='width of main plot window (in pixels)'),
-        CVar('linewidth', 3.0, 'float', min=0, step=0.5, desc='line width for each trace (in pixels)'),
-        CVar('markersize', 4.0, 'float', min=0, step=0.5, desc='size of plot markers (in pixels)'),
-        CVar('show_grid', True, 'bool', desc='whether to show grid lines'),
-        CVar('show_fullbox', True, 'bool', desc='whether to show a full box around plot,\nor only left and bottom axes'),
-        ]
+#
+# plot = [CVar('theme', '<Auto>', 'choice', choices=PLOT_THEMES,
+#             desc='plotting theme for colors and "look and feel"'),
+#         CVar('height', 550, 'int', min=100, desc='height of main plot window (in pixels)'),
+#         CVar('width', 600, 'int', min=100, desc='width of main plot window (in pixels)'),
+#         CVar('linewidth', 3.0, 'float', min=0, step=0.5, desc='line width for each trace (in pixels)'),
+#         CVar('markersize', 4.0, 'float', min=0, step=0.5, desc='size of plot markers (in pixels)'),
+#         CVar('show_grid', True, 'bool', desc='whether to show grid lines'),
+#         CVar('show_fullbox', True, 'bool', desc='whether to show a full box around plot,\nor only left and bottom axes'),
+#         ]
 
 
 exafs = [CVar('rbkg', 1.0, 'float', min=0, step=0.1, max=10, desc='R value separating background from EXAFS signal'),
@@ -252,6 +281,12 @@ prepeaks = [CVar('elo_rel', -20, 'float',  step=0.5, desc='low-energy fit range,
            CVar('fitspace', 'Normalized μ(E)', 'choice', choices=list(PrePeak_ArrayChoices.keys()),
                 desc='Array to use for Pre-edge peak fitting')]
 
+
+curvefit = [CVar('xlo', -1000, 'float',  step=0.5, desc='low-X fit range'),
+           CVar('xhi',   1000, 'float',  step=0.5, desc='high-X fit range'),
+           CVar('fitspace', 'Raw Y Data', 'choice', choices=list(CurveFit_ArrayChoices.keys()),
+                desc='Array to use for Curve Fitting')]
+
 regression = [CVar('elo_rel', -40, 'float',  desc='low-energy fit range, relative to E0'),
               CVar('ehi_rel', 100, 'float',  desc='high-energy fit range, relative to E0'),
               CVar('fitspace', 'Normalized μ(E)', 'choice', choices=list(Linear_ArrayChoices.keys()),
@@ -270,6 +305,7 @@ regression = [CVar('elo_rel', -40, 'float',  desc='low-energy fit range, relativ
        ]
 
 xasnorm = [CVar('auto_e0',  True, 'bool', desc='whether to automatically set E0'),
+           CVar('auto_plot',  True, 'bool', desc='whether to automatically plot the Current Group'),
            CVar('auto_nnorm',  True, 'bool', desc='whether to automatically set normalization polynomial'),
            CVar('auto_step',  True, 'bool', desc='whether to automatically set edge step'),
            CVar('show_e0',  True, 'bool', desc='whether to show E0'),
@@ -301,9 +337,9 @@ FULLCONF= {}
 
 _locals = locals()
 
-for section in ('main', 'autosave', 'pin', 'plot', 'xasnorm', 'exafs',
+for section in ('main', 'autosave', 'pin', 'xasnorm', 'exafs',
                 'feffit', 'prepeaks', 'lincombo', 'pca', 'regression',
-                'xydata', 'xrd1d'):
+                'xydata', 'curvefit'):   # 'xrd1d',
     sname = section
     XASCONF[sname] = {}
     FULLCONF[sname] = {}
