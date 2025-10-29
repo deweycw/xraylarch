@@ -2,7 +2,7 @@
 """
 utilities for larch
 """
-from __future__ import print_function
+import time
 import re
 import sys
 import os
@@ -143,9 +143,20 @@ def unique_name(name, nlist, max=1000):
 
     """
     out = name
+    xval = 0
     if name in nlist:
-        for i in range(1, max+1):
-            out = "%s_%i"  % (name, i)
+        if '_' in name:
+            words = name.split('_')
+            try:
+                xval = int(words[-1])
+                words.pop()
+            except Exception:
+                pass
+
+            name = '_'.join(words)
+
+        for i in range(max):
+            out = f"{name}_{xval+i+1}"
             if out not in nlist:
                 break
     return out
@@ -215,13 +226,19 @@ def b64hash(s):
     _hash.update(str2bytes(s))
     return bytes2str(b64encode(_hash.digest()))
 
-def get_sessionid():
-    """get 8 character string encoding machine name and process id"""
-    _hash = hashlib.sha256()
-    _hash.update(f"{uuid.getnode():d} {os.getpid():d}".encode('ASCII'))
-    out = b64encode(_hash.digest()).decode('ASCII')[3:11]
-    return out.replace('/', '-').replace('+', '=')
+def get_session_info():
+    "retun uuid.getnode and os.getpid"
+    return ' '.join([str(uuid.getnode()), str(os.getpid())])
 
+def get_sessionid(with_time=False, extra=None, len=8):
+    """get 8 character string encoding machine name and process id"""
+    dat = get_session_info()
+    if with_time:
+        dat = f"{dat} {time.time_ns():d}"
+    if extra is not None:
+        dat = f"{dat} {extra}"
+    hash = b64hash(dat.encode('ASCII'))[3:3+len]
+    return hash.replace('/', '-').replace('+', '=')
 
 def random_varname(n, rng_seed=None):
     L = 'abcdefghijklmnopqrstuvwxyz0123456789'

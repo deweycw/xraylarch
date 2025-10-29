@@ -16,10 +16,11 @@ from larch.xafs.xafsutils import guess_energy_units
 from larch.wxlib import (BitmapButton, FloatCtrl, FloatSpin, get_icon,
                          SimpleText, pack, Button, HLine, Choice, Check,
                          GridPanel, CEN, RIGHT, LEFT, plotlabels,
-                         get_zoomlimits, set_zoomlimits)
+                         get_zoomlimits, set_zoomlimits,
+                         get_panel_plot_config, get_markercolors)
 
 from larch.utils.physical_constants import ATOM_NAMES
-from larch.wxlib.plotter import last_cursor_pos
+from larch.wxlib.plotter import last_cursor_pos, set_plotwindow_title
 from .taskpanel import TaskPanel, autoset_fs_increment, update_confval
 from .config import (make_array_choice, EDGES, ATSYMS,
                      NNORM_CHOICES, NNORM_STRINGS, NORM_METHODS)
@@ -45,7 +46,6 @@ PlotSel_Choices = {'XY Data': 'ydat',
 
 FSIZE = 120
 FSIZEBIG = 175
-
 
 class XYDataPanel(TaskPanel):
     """XY Data Panel"""
@@ -92,6 +92,13 @@ class XYDataPanel(TaskPanel):
 
         pack(trow, tsizer)
 
+        self.wids['xarr'] = Choice(panel, choices=['xdat', 'ydat'],
+                                   action=self.onXSelect, size=(250, -1))
+        self.wids['yarr'] = Choice(panel, choices=['xdat', 'ydat'],
+                                   action=self.onYSelect, size=(250, -1))
+        self.wids['xarr'].SetSelection(0)
+        self.wids['yarr'].SetSelection(1)
+
         scale = self.add_floatspin('scale', action=self.onSet_Scale,
                                                 digits=6, increment=0.05, value=1.0,
                                                 size=(FSIZEBIG, -1))
@@ -105,6 +112,7 @@ class XYDataPanel(TaskPanel):
 
         use_auto = Button(panel, 'Use Default Settings', size=(200, -1),
                           action=self.onUseDefaults)
+
 
         def CopyBtn(name):
             return Button(panel, 'Copy', size=(60, -1),
@@ -125,6 +133,14 @@ class XYDataPanel(TaskPanel):
         add_text('XY Data:')
         panel.Add(use_auto, dcol=1)
         panel.Add(SimpleText(panel, 'Copy to Selected Groups:'), style=RIGHT, dcol=2)
+
+        add_text('X Array:')
+        panel.Add(self.wids['xarr'], dcol=2)
+        panel.Add(CopyBtn('xarr'), dcol=1, style=RIGHT)
+
+        add_text('Y Array:')
+        panel.Add(self.wids['yarr'], dcol=2)
+        panel.Add(CopyBtn('yarr'), dcol=1, style=RIGHT)
 
         add_text('Scale Factor:')
         panel.Add(scale)
@@ -176,7 +192,50 @@ class XYDataPanel(TaskPanel):
         setattr(dgroup.config, self.configname, conf)
         return conf
 
-    def fill_form(self, dgroup):
+    def onXSelect(self, event=None):
+        dgroup = self.controller.get_group()
+        if dgroup is None:
+            return
+        xname = self.wids['xarr'].GetStringSelection()
+        yname = self.wids['yarr'].GetStringSelection()
+
+        xdat = getattr(dgroup, xname, None)
+        if xdat is None:
+            return
+        dgroup.xdat = 1.0  * xdat
+        nx = len(xdat)
+        yarr = [xname]
+        for aname, npts in self.data_arrays.items():
+            if npts == nx and aname != xname:
+                yarr.append(aname)
+
+        self.wids['yarr'].Clear()
+        self.wids['yarr'].AppendItems(yarr)
+        if yname in yarr:
+            self.wids['yarr'].SetStringSelection(yname)
+        elif len(yarr) > 1:
+            self.wids['yarr'].SetSelection(1)
+        else:
+            self.wids['yarr'].SetSelection(0)
+
+        yname = self.wids['yarr'].GetStringSelection()
+        ydat = getattr(dgroup, yname, xdat)
+        dgroup.ydat = 1.0  * ydat
+        wx.CallAfter(self.onReprocess)
+
+    def onYSelect(self, event=None):
+        dgroup = self.controller.get_group()
+
+        if dgroup is None:
+            return
+
+        yname = self.wids['yarr'].GetStringSelection()
+        ydat = getattr(dgroup, yname, None)
+        if ydat is not None:
+            dgroup.ydat = 1.0  * ydat
+        wx.CallAfter(self.onReprocess)
+
+    def fill_form(self, dgroup, newgroup=False):
         """fill in form from a data group"""
         opts = self.get_config(dgroup)
         self.skip_process = True
@@ -186,10 +245,10 @@ class XYDataPanel(TaskPanel):
 
         self.wids['scale'].SetValue(opts['scale'])
         self.wids['xshift'].SetValue(opts['xshift'])
+        self.set_array_selections(dgroup)
 
         frozen = opts.get('is_frozen', False)
         frozen = getattr(dgroup, 'is_frozen', frozen)
-
         self.wids['is_frozen'].SetValue(frozen)
         self._set_frozen(frozen)
         wx.CallAfter(self.unset_skip_process)
@@ -202,7 +261,65 @@ class XYDataPanel(TaskPanel):
         form_opts = {}
         form_opts['scale'] = self.wids['scale'].GetValue()
         form_opts['xshift'] = self.wids['xshift'].GetValue()
+        form_opts['xarr'] = self.wids['xarr'].GetStringSelection()
+        form_opts['yarr'] = self.wids['yarr'].GetStringSelection()
         return form_opts
+
+    def onPanelExposed(self, **kws):
+        # called when notebook is selected
+        self.set_array_selections()
+
+    def set_array_selections(self, dgroup=None):
+        if dgroup is None:
+            dgroup = self.controller.get_group()
+        if dgroup is None:
+            return
+        xname = self.wids['xarr'].GetStringSelection()
+        yname = self.wids['yarr'].GetStringSelection()
+
+
+        self.data_arrays = {}
+        for attr in dir(dgroup):
+            obj = getattr(dgroup, attr)
+            if isinstance(obj, np.ndarray):
+                if len(obj.shape) == 1 and len(obj) > 2:
+                    self.data_arrays[attr] = len(obj)
+
+        xarr = ['xdat']
+        for name in ('energy', 'k', 'r', 'q'):
+            if name in self.data_arrays:
+                xarr.append(name)
+        for name in self.data_arrays:
+            if name not in xarr:
+                xarr.append(name)
+        if xname not in xarr:
+            xname = 'xdat'
+
+        xdat = getattr(dgroup, xname, dgroup.xdat)
+        if xdat is None:
+            return
+        dgroup.xdat = 1.0  * xdat
+        nx = len(xdat)
+
+        self.wids['xarr'].Clear()
+        self.wids['xarr'].AppendItems(xarr)
+        self.wids['xarr'].SetStringSelection(xname)
+
+        yarr = [xname]
+        for aname, npts in self.data_arrays.items():
+            if npts == nx and aname != xname:
+                yarr.append(aname)
+
+        self.wids['yarr'].Clear()
+        self.wids['yarr'].AppendItems(yarr)
+        if yname in yarr:
+            self.wids['yarr'].SetStringSelection(yname)
+        else:
+            self.wids['yarr'].SetSelection(1)
+        ydat = getattr(dgroup, yname, None)
+        if ydat is not None:
+            dgroup.ydat = 1.0  * ydat
+        wx.CallAfter(self.onReprocess)
 
 
     def _set_frozen(self, frozen):
@@ -255,12 +372,7 @@ class XYDataPanel(TaskPanel):
         voff = self.wids['plot_voff'].GetValue()
         plot_traces = []
         newplot = True
-        plotopts = self.controller.get_plot_conf()
-        popts = {'style': 'solid', 'marker': None}
-        popts['linewidth'] = plotopts.pop('linewidth')
-        popts['marksize'] = plotopts.pop('markersize')
-        popts['grid'] = plotopts.pop('show_grid')
-        popts['fullbox'] = plotopts.pop('show_fullbox')
+        ppanel = self.controller.get_display(stacked=False).panel
 
         for ix, checked in enumerate(group_ids):
             groupname = self.controller.file_groups[str(checked)]
@@ -273,25 +385,13 @@ class XYDataPanel(TaskPanel):
                  getattr(dgroup, 'd2ydx', None) is None or
                  getattr(dgroup, 'ynorm', None) is None)):
                 self.process(dgroup=dgroup)
-
-            trace = {'xdata': dgroup.xplot,
+            plot_traces.append({'xdata': dgroup.xplot,
                      'ydata': getattr(dgroup, yarray_name) + ix*voff,
-                     'label': dgroup.filename, 'new': newplot}
-            trace.update(popts)
-            plot_traces.append(trace)
+                     'label': dgroup.filename,
+                     'new': newplot})
             newplot = False
 
-        ppanel = self.controller.get_display(stacked=False).panel
         zoom_limits = get_zoomlimits(ppanel, dgroup)
-
-        nplot_traces = len(ppanel.conf.traces)
-        nplot_request = len(plot_traces)
-        if nplot_request > nplot_traces:
-            linecolors = ppanel.conf.linecolors
-            ncols = len(linecolors)
-            for i in range(nplot_traces, nplot_request+5):
-                ppanel.conf.init_trace(i,  linecolors[i%ncols], 'dashed')
-
 
         ppanel.plot_many(plot_traces, xlabel=plotlabels.xplot, ylabel=ylabel,
                          zoom_limits=zoom_limits, show_legend=True)
@@ -302,7 +402,8 @@ class XYDataPanel(TaskPanel):
     def onUseDefaults(self, evt=None):
         self.wids['scale'].SetValue(1.0)
         self.wids['xshift'].SetValue(0.0)
-
+        self.wids['xarr'].SetStringSelection('xdat')
+        self.wids['yarr'].SetStringSelection('ydat')
 
     def onCopyAuto(self, evt=None):
         opts = dict(scale=1)
@@ -416,13 +517,13 @@ class XYDataPanel(TaskPanel):
         """
         if self.skip_process and not force:
             return
+
         if dgroup is None:
             dgroup = self.controller.get_group()
         if dgroup is None:
             return
 
         self.ensure_ydat(dgroup)
-
         self.skip_process = True
         conf = self.get_config(dgroup)
         form = self.read_form()
@@ -441,7 +542,6 @@ class XYDataPanel(TaskPanel):
                 f"{gname:s}.ynorm = {gname:s}.ydat/{scale}",
                 f"{gname:s}.dydx  = gradient({gname:s}.ynorm)/gradient({gname:s}.xplot)",
                 f"{gname:s}.d2ydx = gradient({gname:s}.dydx)/gradient({gname:s}.xplot)"]
-
         self.larch_eval('\n'.join(cmds))
         self.unset_skip_process()
         return
@@ -496,8 +596,10 @@ class XYDataPanel(TaskPanel):
 
         if self.skip_plotting:
             return
-        ppanel = self.controller.get_display(stacked=False).panel
-
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name(self.title)
+        set_plotwindow_title(disp, _larch=self.controller.larch, default='XY Plot')
         plotcmd = ppanel.oplot
         if new:
             plotcmd = ppanel.plot
@@ -519,10 +621,8 @@ class XYDataPanel(TaskPanel):
         if plot_yarrays is None and hasattr(dgroup, 'plot_yarrays'):
             plot_yarrays = dgroup.plot_yarrays
 
-        popts = self.controller.get_plot_conf()
+        popts = get_panel_plot_config(ppanel)
         popts.update(kws)
-        popts['grid'] = popts.pop('show_grid')
-        popts['fullbox'] = popts.pop('show_fullbox')
 
         path, fname = path_split(dgroup.filename)
         if 'label' not in popts:
@@ -555,30 +655,31 @@ class XYDataPanel(TaskPanel):
         popts['show_legend'] = len(plot_yarrays) > 1
         narr = len(plot_yarrays) - 1
 
-        _linewidth = popts['linewidth']
         for i, pydat in enumerate(plot_yarrays):
             yaname, yopts, yalabel = pydat
             popts.update(yopts)
             if yalabel is not None:
                 popts['label'] = yalabel
-            linewidht = _linewidth
-            if 'linewidth' in popts:
-                linewidth = popts.pop('linewidth')
             popts['delay_draw'] = delay_draw
 
             if yaname == 'i0' and not hasattr(dgroup, yaname):
                 dgroup.i0 = np.ones(len(dgroup.xplot))
-            plotcmd(dgroup.xplot, getattr(dgroup, yaname)+yoff, linewidth=linewidth, **popts)
+            plotcmd(dgroup.xplot, getattr(dgroup, yaname)+yoff, **popts)
             plotcmd = ppanel.oplot
 
         if with_extras and plot_extras is not None:
             axes = ppanel.axes
             for etype, x, y, opts in plot_extras:
                 if etype == 'marker':
-                    xpopts = {'marker': 'o', 'markersize': 5,
+                    col_edge, col_face = get_markercolors(trace=len(plot_yarrays),
+                                                linecolors=popts['linecolors'],
+                                                facecolor=popts['facecolor'])
+
+                    xpopts = {'marker': 'o',
+                             'markersize': popts['markersize'],
                               'label': '_nolegend_',
-                              'markerfacecolor': 'red',
-                              'markeredgecolor': '#884444'}
+                              'markerfacecolor': col_face,
+                              'markeredgecolor': col_edge}
                     xpopts.update(opts)
                     axes.plot([x], [y], **xpopts)
                 elif etype == 'vline':

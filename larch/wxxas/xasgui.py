@@ -29,25 +29,23 @@ from larch.io import save_session, read_session
 from larch.math import index_of
 from larch.utils import (isotime, time_ago, is_gzip, path_split)
 from larch.utils.strutils import (file2groupname, unique_name,
+                                  get_session_info, get_sessionid,
                                   common_startstring, asfloat)
 
 from larch.larchlib import read_workdir, save_workdir, read_config, save_config
 
-from larch.wxlib import (LarchFrame, ColumnDataFileFrame,
-                         AthenaImporter, SpecfileImporter,
-                         XasImporter, FileCheckList, FloatCtrl,
-                         FloatSpin, SetTip, get_icon, SimpleText,
-                         TextCtrl, pack, Button, Popup, HLine,
-                         FileSave, FileOpen, Choice, Check, MenuItem,
-                         HyperText, set_color, GUI_COLORS, CEN, LEFT,
-                         FRAMESTYLE, Font, FONTSIZE, flatnotebook,
-                         LarchUpdaterDialog, GridPanel, CIFFrame,
-                         Structure2FeffFrame, FeffResultsFrame,
-                         LarchWxApp, OkCancel, ExceptionPopup,
-                         set_color)
+from larch.wxlib import (LarchFrame, ColumnDataFileFrame, AthenaImporter,
+                         SpecfileImporter, XasImporter, FileCheckList,
+                         FloatCtrl, FloatSpin, SetTip, get_icon, SimpleText,
+                         TextCtrl, pack, Button, Popup, HLine, FileSave,
+                         FileOpen, Choice, Check, MenuItem, HyperText,
+                         set_color, GUI_COLORS, CEN, LEFT, FRAMESTYLE,
+                         flatnotebook, LarchUpdaterDialog, GridPanel, CIFFrame,
+                         Structure2FeffFrame, FeffResultsFrame, LarchWxApp,
+                         OkCancel, ExceptionPopup, set_color, get_font)
 
 
-from larch.wxlib.plotter import get_display
+from larch.wxlib.plotter import get_display, save_plot_config
 
 from larch.fitting import fit_report
 from larch.site_config import icondir, home_dir, user_larchdir
@@ -59,8 +57,8 @@ from .config import (FULLCONF, CONF_SECTIONS,  CVar, ATHENA_CLAMPNAMES,
                      LARIX_PANELS, LARIX_MODES)
 
 from .xas_dialogs import (MergeDialog, RenameDialog, RemoveDialog,
-                          ExportCSVDialog,   QuitDialog, LoadSessionDialog,
-                          fit_dialog_window)
+                          ExportCSVDialog, QuitDialog, LoadSessionDialog,
+                          LockedSessionDialog, fit_dialog_window)
 
 from .datatasks import (RebinDataFrame, DeglitchFrame,
                          EnergyCalibrateFrame, SmoothDataFrame,
@@ -68,7 +66,7 @@ from .datatasks import (RebinDataFrame, DeglitchFrame,
                          SpectraCalcFrame)
 
 from larch.io import (read_ascii, read_xdi, read_gsexdi, gsescan_group,
-                          groups2csv, is_athena_project,
+                      groups2csv, is_athena_project,
                       is_larch_session_file,
                       AthenaProject, make_hashkey, is_specfile, open_specfile)
 from larch.io.xas_data_source import open_xas_source
@@ -83,7 +81,7 @@ FNB_STYLE |= flat_nb.FNB_SMART_TABS|flat_nb.FNB_NO_NAV_BUTTONS
 
 LEFT = wx.ALIGN_LEFT
 CEN |=  wx.ALL
-FILE_WILDCARDS = "Data Files|*.0*;*.dat;*.DAT;*.xdi;*.txt;*.TXT;*.prj;*.sp*c;*.h*5;*.larix|All files (*.*)|*.*"
+FILE_WILDCARDS = "Data Files|*.dat;*.DAT;*.xdi;*.txt;*.TXT;*.prj;*.sp*c;*.h*5;*.larix;*.0*;*.1*;*.2*;*.3*;*.4*;*.5*;*.6*;*.7*;*.8*;*.9*|All files (*.*)|*.*"
 
 ICON_FILE = 'onecone.ico'
 LARIX_SIZE = (1050, 850)
@@ -122,13 +120,13 @@ class PreferencesFrame(wx.Frame):
         self.parent = parent
         wx.Frame.__init__(self, None, -1,  'Larix Preferences',
                           style=FRAMESTYLE, size=(700, 725))
-
+        self.SetFont(get_font())
         sizer = wx.BoxSizer(wx.VERTICAL)
         tpanel = wx.Panel(self)
 
-        self.title = SimpleText(tpanel, 'Edit Preference and Defaults',
+        self.stitle = SimpleText(tpanel, '  Edit Preference and Defaults',
                                 size=(500, 25),
-                                font=Font(FONTSIZE+1), style=LEFT,
+                                font=get_font(larger=1), style=LEFT,
                                 colour=GUI_COLORS.nb_text)
 
         self.save_btn = Button(tpanel, 'Save for Future sessions',
@@ -144,14 +142,30 @@ class PreferencesFrame(wx.Frame):
         self.panselect = PanelSelectionPanel(self.nb, parent, controller)
         self.nb.AddPage(self.panselect, 'analysis panels', True)
 
+        ppanel = GridPanel(self.nb, ncols=3, nrows=8, pad=3, itemstyle=LEFT)
+
+        title = SimpleText(ppanel, ' Plot Configuration ',
+                           size=(550, -1), font=get_font(larger=1),
+                           colour=GUI_COLORS.title, style=LEFT)
+        wid = Button(ppanel, ' Save Plot Configuration',
+                     size=(250, -1), action=self.onSavePlotOpts)
+        wid.SetToolTip('Save the current plot configuration for Plot Window 1')
+
+        ppanel.Add((5, 5), newrow=True)
+        ppanel.Add(title, newrow=True, dcol=4)
+        ppanel.Add((5, 5), newrow=True)
+        ppanel.Add(wid, newrow=True, dcol=4)
+        ppanel.pack()
+        self.nb.AddPage(ppanel, ' plot ', True)
+
         for name, data in FULLCONF.items():
             self.wids[name] = {}
 
             panel = GridPanel(self.nb, ncols=3, nrows=8, pad=3, itemstyle=LEFT)
-            panel.SetFont(Font(FONTSIZE))
+            panel.SetFont(get_font())
             title = CONF_SECTIONS.get(name, name)
             title = SimpleText(panel, f"  {title}",
-                               size=(550, -1), font=Font(FONTSIZE+2),
+                               size=(550, -1), font=get_font(larger=1),
                                colour=GUI_COLORS.title, style=LEFT)
 
             self.wids[name]['_key_'] = SimpleText(panel, " <name> ",
@@ -208,7 +222,7 @@ class PreferencesFrame(wx.Frame):
 
         self.nb.SetSelection(0)
 
-        sizer.Add(self.title, 0, LEFT, 3)
+        sizer.Add(self.stitle, 0, LEFT, 3)
         sizer.Add(self.save_btn, 0, LEFT, 5)
         sizer.Add((5, 5), 0, LEFT, 5)
         sizer.Add(self.nb, 1, LEFT|wx.EXPAND, 5)
@@ -219,6 +233,14 @@ class PreferencesFrame(wx.Frame):
 
         self.Show()
         self.Raise()
+
+    def onSavePlotOpts(self, event=None):
+        out = save_plot_config()
+        if not out:
+            msg = 'could not save plot options'
+        else:
+            msg = f"wrote '{out}'"
+        self.parent.write_message(msg)
 
     def update_help(self, label=None, event=None, section='main', option=None):
         cvar = FULLCONF[section][option]
@@ -240,12 +262,6 @@ class PreferencesFrame(wx.Frame):
         else:
             value = wid.GetValue()
         self.controller.config[section][option] = value
-        if section == 'plot':
-            plotter = self.parent.larch.symtable._plotter
-            for attr in ('plot1', 'plot2', 'plot3'):
-                disp = getattr(plotter, attr, None)
-                if disp is not None:
-                    disp.set_config(**{option: value})
 
     def onSave(self, event=None):
         current_panels = list(self.parent.get_panels())
@@ -262,6 +278,7 @@ class PanelSelectionPanel(wx.Panel):
         wx.Panel.__init__(self, parent)
 
         self.wids = {}
+        self.SetFont(get_font())
 
         style     = wx.DEFAULT_FRAME_STYLE|wx.TAB_TRAVERSAL
         labstyle  = wx.ALIGN_LEFT|wx.ALIGN_CENTER_VERTICAL|wx.ALL
@@ -274,11 +291,11 @@ class PanelSelectionPanel(wx.Panel):
 
         title = SimpleText(panel, 'Select Larix Modes and Analysis Panels',
                            size=(550, -1),
-                           font=Font(FONTSIZE+2), style=LEFT,
+                           font=get_font(larger=1), style=LEFT,
                            colour=GUI_COLORS.title)
 
-        modetitle = SimpleText(panel, 'Analysis Mode: ')
-        panetitle = SimpleText(panel, 'Select Individual Analysis Panels: ')
+        modetitle = SimpleText(panel, '  Analysis Mode: ')
+        panetitle = SimpleText(panel, '  Select Individual Analysis Panels: ')
 
         self.wids = wids = {}
         self.current_mode = self.main.mode
@@ -297,7 +314,7 @@ class PanelSelectionPanel(wx.Panel):
         sizer.Add(modetitle, (irow, 0), (1, 1), labstyle|wx.ALL, 3)
         sizer.Add(wids['modechoice'], (irow, 1), (1, 1), labstyle|wx.ALL, 3)
         irow += 1
-        sizer.Add(HLine(panel, (325, 3)), (irow, 0), (1, 2), labstyle|wx.ALL, 3)
+        sizer.Add(HLine(panel, (450, 3)), (irow, 0), (1, 2), labstyle|wx.ALL, 3)
         irow += 1
         sizer.Add(panetitle, (irow, 0), (1, 2), labstyle|wx.ALL, 3)
 
@@ -310,16 +327,16 @@ class PanelSelectionPanel(wx.Panel):
 
         for key, atab in LARIX_PANELS.items():
             iname = (atab.title + ' '*strlen)[:strlen]
-            cb = wx.CheckBox(panel, -1, iname)
-            cb.SetValue(key in page_map)
-            desc = SimpleText(panel, LARIX_PANELS[key].desc)
-            self.selections[key] = cb
+            cbox = wx.CheckBox(panel, -1, iname)
+            cbox.SetValue(key in page_map)
+            desc = SimpleText(panel, atab.desc)
+            self.selections[key] = cbox
             irow += 1
-            sizer.Add(cb, (irow, 0), (1, 1), labstyle,  5)
-            sizer.Add(desc, (irow, 1), (1, 1), labstyle,  5)
+            sizer.Add(cbox, (irow, 0), (1, 1), labstyle,  2)
+            sizer.Add(desc, (irow, 1), (1, 1), labstyle,  2)
 
         irow += 1
-        sizer.Add(HLine(panel, (325, 3)), (irow, 0), (1, 2), labstyle|wx.ALL, 3)
+        sizer.Add(HLine(panel, (450, 3)), (irow, 0), (1, 2), labstyle|wx.ALL, 3)
 
         btn_ok     = Button(panel, 'Apply Now', size=(150, -1), action=self.OnApply)
         irow += 1
@@ -393,9 +410,10 @@ class LarixFrame(wx.Frame):
         self.with_wx_inspect = with_wx_inspect
         self.last_col_config = {}
         self.last_spec_config = {}
-        self.last_session_file = None
-        self.last_session_read = None
+
         self.last_athena_file = None
+        self.last_autosave = 0
+        self.last_save_message = ('Session has not been saved', '', '')
         self.paths2read = []
         self.current_filename = filename
 
@@ -421,9 +439,6 @@ class LarixFrame(wx.Frame):
         iconfile = Path(icondir, ICON_FILE).as_posix()
         self.SetIcon(wx.Icon(iconfile, wx.BITMAP_TYPE_ICO))
 
-        self.last_autosave = 0
-        self.last_save_message = ('Session has not been saved', '', '')
-
         self.timers = {'pin': wx.Timer(self),
                        'autosave': wx.Timer(self)}
         self.Bind(wx.EVT_TIMER, self.onPinTimer, self.timers['pin'])
@@ -434,7 +449,7 @@ class LarixFrame(wx.Frame):
         self.SetTitle(LARIX_TITLE)
         self.SetSize(LARIX_SIZE)
         self.SetMinSize(LARIX_MINSIZE)
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         self.createMainPanel()
         self.createMenus()
         self.statusbar = self.CreateStatusBar(2, style=wx.STB_DEFAULT_STYLE)
@@ -445,13 +460,15 @@ class LarixFrame(wx.Frame):
         self.Show()
 
         self.Raise()
-        self.statusbar.SetStatusText('ready', 1)
-        self.timers['autosave'].Start(30_000)
 
         if self.current_filename is not None:
             wx.CallAfter(self.onRead, self.current_filename)
+        else:
+            lockfiles = self.controller.get_otherlockfiles()
+            if len(lockfiles) > 0:
+                self.show_lockfile_sessions(lockfiles)
 
-        # show_wxsizes(self)
+
         if check_version:
             version_thread.join()
             if self.vinfo is not None:
@@ -464,6 +481,10 @@ class LarixFrame(wx.Frame):
         xsiz, ysiz = self.GetSize()
         plotpos = (xpos+xsiz+2, ypos)
         self.controller.get_display(stacked=False, position=plotpos)
+
+        self.statusbar.SetStatusText('ready', 1)
+        self.timers['autosave'].Start(30_000)
+
 
         if self.controller.config['main'].get('show_larch_buffer', False):
             wx.CallAfter(self.onShowLarchBuffer)
@@ -487,24 +508,31 @@ class LarixFrame(wx.Frame):
 
         def Btn(msg, x, act):
             b = Button(ltop, msg, size=(x, 30),  action=act)
-            b.SetFont(Font(FONTSIZE))
+            b.SetFont(get_font())
             return b
 
         sel_none = Btn('Select None',   120, self.onSelNone)
         sel_all  = Btn('Select All',    120, self.onSelAll)
 
-        file_actions = [('Show Group Journal', self.onGroupJournal),
-                        ('Copy Group', self.onCopyGroup),
-                        ('Rename Group', self.onRenameGroup),
-                        ('Remove Group', self.onRemoveGroup)]
+        file_actions = [("Show Group Journal\tCtrl+J", self.onGroupJournal, "ctrl+J"),
+                        ("--sep--", None, None),
+                        ("Copy Group\tCtrl+Shift+C", self.onCopyGroup, "ctrl+shift+C"),
+                        ("Rename Group\tCtrl+N", self.onRenameGroup, "ctrl+N"),
+                        ("Remove Group\tCtrl+X", self.onRemoveGroup, "ctrl+X"),
+                        ("Remove Selected Groups\tCtrl+Delete", self.onRemoveGroups, "ctrl+delete"),
+                        ("Merge Selected Groups\tCtrl+Shift+M", self.onMergeData, "ctrl+shift+M"),
+                        ("--sep--", None, None),
+                        ("Freeze Selected Groups\tCtrl+F", self.onFreezeGroups, "ctrl+F"),
+                        ("UnFreeze Selected Groups\tCtrl+Shift+F", self.onUnFreezeGroups, "ctrl+shift+F"),
+                        ]
 
         self.controller.filelist = FileCheckList(leftpanel, main=self,
                                                  pre_actions=file_actions,
                                                  select_action=self.ShowFile,
-                                                 remove_action=self.RemoveFile)
+                                                 remove_action=self.RemoveFile,
+                                                 with_remove_from_list=False)
+
         set_color(self.controller.filelist, 'list_fg', bg='list_bg')
-        # self.controller.filelist.check_event  = self.filelist_check_event
-        self.controller.filelist.Bind(wx.EVT_CHECKLISTBOX, self.filelist_check_event)
 
         tsizer = wx.BoxSizer(wx.HORIZONTAL)
         tsizer.Add(sel_all, 1, LEFT|wx.GROW, 1)
@@ -522,12 +550,12 @@ class LarixFrame(wx.Frame):
         panel.SetSize((650, 650))
         panel.SetMinSize((450, 550))
         sizer = wx.BoxSizer(wx.VERTICAL)
-        self.title = SimpleText(panel, ' ', size=(500, 25),
-                                font=Font(FONTSIZE+3), style=LEFT,
+        self.maintitle = SimpleText(panel, ' ', size=(500, 25),
+                                font=get_font(), style=LEFT,
                                 colour=GUI_COLORS.nb_text)
 
         ir = 0
-        sizer.Add(self.title, 0, CEN, 3)
+        sizer.Add(self.maintitle, 0, CEN, 3)
 
         self.nb = flatnotebook(panel, {},
                                panelkws={'controller': self.controller},
@@ -590,6 +618,32 @@ class LarixFrame(wx.Frame):
         current_panels = self.get_panels()
         return current_panels.get(name, None)
 
+
+    def show_lockfile_sessions(self, lockfiles, event=None):
+        sessdata = []
+        if len(lockfiles) > 0:
+            session_info = get_session_info()
+            this_mac_id, thispid = session_info.split()
+            for lockfile, dat in lockfiles.items():
+                sessfile, mac_id, pid = dat
+                if this_mac_id == mac_id:
+                    sesspath = Path(self.controller.larix_folder, sessfile)
+                    if sesspath.exists():
+                        sessdata.append((lockfile, sesspath))
+        if len(sessdata) > 0:
+            dlg = LockedSessionDialog(self, sessdata)
+            res = dlg.GetResponse()
+
+            dlg.Destroy()
+            if res.ok:
+                for lfile in res.del_list:
+                    lfile = Path(self.controller.larix_folder, lfile)
+                    if lfile.exists():
+                        os.unlink(lfile)
+                for ifile in res.imp_list:
+                    self.onLoadSession(path=ifile)
+
+
     def process_normalization(self, dgroup, force=True, use_form=True, force_mback=False):
         self.get_nbpage('xasnorm')[1].process(dgroup, force=force, force_mback=False)
 
@@ -617,7 +671,6 @@ class LarixFrame(wx.Frame):
         on_hide = getattr(oldpage, 'onPanelHidden', None)
         if callable(on_hide):
             on_hide()
-
         on_expose = getattr(newpage, 'onPanelExposed', None)
         if callable(on_expose):
             on_expose()
@@ -637,16 +690,9 @@ class LarixFrame(wx.Frame):
             s = str(fname)
             if s in self.controller.file_groups:
                 group = self.controller.file_groups.pop(s)
+            if s in self.controller.larch.symtable:
+                self.controller.larch.symtable.del_symbol(s)
             self.controller.sync_xasgroups()
-
-    def filelist_check_event(self, evt=None):
-        """MN 2024-Feb this is included to better 'swallow' the checked event,
-        so that it does in fact run ShowFile().
-        This could be removed eventually, as wxutils will also no longer run
-        filelist.SetSelection()"""
-        index = evt.GetSelection()
-        label = evt.GetString()
-        pass
 
     def ShowFile(self, evt=None, groupname=None,
                  filename=None, process=True, plot='auto', **kws):
@@ -664,7 +710,6 @@ class LarixFrame(wx.Frame):
             return
 
         datatype = getattr(dgroup, 'datatype', 'xydata')
-        # print(f"ShowFile {dgroup=}, {groupname=}, {datatype=}, {plot=}")
         panname = 'xydata'
         if datatype.startswith('xas'):
             cur_pan = self.nb.GetSelection()
@@ -674,6 +719,7 @@ class LarixFrame(wx.Frame):
                     panname = name
 
         ipage, pagepanel = self.get_nbpage(panname)
+
         if panname == 'xasnorm':
             if not (hasattr(dgroup, 'norm') and hasattr(dgroup, 'e0')):
                 process = True
@@ -691,7 +737,7 @@ class LarixFrame(wx.Frame):
             sdesc = sdesc.value
         if not isinstance(sdesc, str):
             sdesc = repr(sdesc)
-        self.title.SetLabel(sdesc)
+        self.maintitle.SetLabel(sdesc)
 
         self.controller.group = dgroup
         self.controller.groupname = groupname
@@ -700,8 +746,10 @@ class LarixFrame(wx.Frame):
             pchoose_wid = pagepanel.wids.get('plot_on_choose', None)
             if pchoose_wid is not None:
                 plot = 'yes' if pchoose_wid.IsChecked() else 'no'
+
+        # print(f"ShowFile {dgroup=}, {dgroup.filename=}, {pagepanel=}, {process=}, {plot=}")
         if process or plot == 'yes':
-            pagepanel.fill_form(dgroup)
+            pagepanel.fill_form(dgroup, newgroup=True)
             pagepanel.process(dgroup=dgroup)
 
         if plot == 'yes' and hasattr(pagepanel, 'plot'):
@@ -710,9 +758,9 @@ class LarixFrame(wx.Frame):
 
         self.controller.filelist.SetStringSelection(filename)
         self.controller.run_group_callbacks()
+        wx.CallAfter(self.controller.filelist.SetFocus)
 
     def createMenus(self):
-        # ppnl = self.plotpanel
         self.menubar = wx.MenuBar()
         file_menu = wx.Menu()
         pref_menu = wx.Menu()
@@ -741,10 +789,10 @@ class LarixFrame(wx.Frame):
         file_menu.AppendSeparator()
 
         # export/save data
-        MenuItem(self, file_menu, "&Save Larch Session\tCtrl+S",
+        self.save_session_menu = MenuItem(self, file_menu,
+                 "&Save Larch Session\tCtrl+S",
                  "Save Session to a File",  self.onSaveSession)
-
-        MenuItem(self, file_menu, "&Save Larch Session As ...\tCtrl+A",
+        MenuItem(self, file_menu, "&Save Larch Session As ...\tCtrl+Shift+S",
                  "Save Session to a File",  self.onSaveSessionAs)
 
         MenuItem(self, file_menu, "Save Selected Groups to Athena Project File",
@@ -783,31 +831,31 @@ class LarixFrame(wx.Frame):
         MenuItem(self, pref_menu, 'Edit Preferences\tCtrl+E', 'Customize Preferences',
                  self.onPreferences)
 
-        MenuItem(self, group_menu, "Copy This Group",
+        MenuItem(self, group_menu, "Copy This Group\tCtrl+Shift+C",
                  "Copy This Group", self.onCopyGroup)
 
-        MenuItem(self, group_menu, "Rename This Group",
+        MenuItem(self, group_menu, "Rename This Group\tCtrl+N",
                  "Rename This Group", self.onRenameGroup)
 
-        MenuItem(self, group_menu, "Show Journal for This Group",
+        MenuItem(self, group_menu, "Show Journal for This Group\tCtrl+J",
                  "Show Processing Journal for This Group", self.onGroupJournal)
 
         group_menu.AppendSeparator()
 
-        MenuItem(self, group_menu, "Remove Selected Groups",
+        MenuItem(self, group_menu, "Remove Selected Groups\tCtrl+Delete",
                  "Remove Selected Group", self.onRemoveGroups)
 
         group_menu.AppendSeparator()
 
-        MenuItem(self, group_menu, "Merge Selected Groups",
+        MenuItem(self, group_menu, "Merge Selected Groups\tCtrl+Shift+M",
                  "Merge Selected Groups", self.onMergeData)
 
         group_menu.AppendSeparator()
 
-        MenuItem(self, group_menu, "Freeze Selected Groups",
+        MenuItem(self, group_menu, "Freeze Selected Groups\tCtrl+F",
                  "Freeze Selected Groups", self.onFreezeGroups)
 
-        MenuItem(self, group_menu, "UnFreeze Selected Groups",
+        MenuItem(self, group_menu, "UnFreeze Selected Groups\tCtrl+Shift+F",
                  "UnFreeze Selected Groups", self.onUnFreezeGroups)
 
         MenuItem(self, xasdata_menu, "Deglitch Data",  "Deglitch Data",
@@ -838,11 +886,11 @@ class LarixFrame(wx.Frame):
         self.menubar.Append(group_menu, "Groups")
         self.menubar.Append(xasdata_menu, "XAS Data")
 
-        MenuItem(self, feff_menu, "Browse CIF Structures, Run Feff",
+        MenuItem(self, feff_menu, "Run Feff from CIF Structures",
                  "Browse CIF Structure, run Feff", self.onCIFBrowse)
-        MenuItem(self, feff_menu, "Generate Feff input from general structures, Run Feff",
+        MenuItem(self, feff_menu, "Run Feff from general structures",
                  "Generate Feff input from general structures, run Feff", self.onStructureBrowse)
-        MenuItem(self, feff_menu, "Browse Feff Calculations, Import Paths",
+        MenuItem(self, feff_menu, "Import Feff Paths from Feff Calculations",
                  "Browse Feff Calculations, Get Feff Paths", self.onFeffBrowse)
 
         self.menubar.Append(feff_menu, "Feff")
@@ -857,15 +905,6 @@ class LarixFrame(wx.Frame):
         self.SetMenuBar(self.menubar)
         self.Bind(wx.EVT_CLOSE,  self.onClose)
         self.Bind(wx.EVT_SYS_COLOUR_CHANGED, self.onSystemDarkMode)
-
-    def onSetTitle(self, savefile=None):
-        """set title of main window"""
-        if savefile is None:
-            savefile = self.controller.autosave_session()
-        if savefile is not None:
-            self.SetTitle(f"Larix [{Path(savefile).name}]")
-        else:
-            self.SetTitle(LARIX_TITLE)
 
     def onSystemDarkMode(self, event=None):
         """notify on light/dark mode change"""
@@ -1001,9 +1040,12 @@ class LarixFrame(wx.Frame):
 
         aprj = AthenaProject(filename=filename)
         for label, grp in zip(grouplist, savegroups):
-            aprj.add_group(grp)
+            try:
+                aprj.add_group(grp)
+            except Exception:
+                print(f"Could not save group  {label} to Athena Project {filename}")
         aprj.save(use_gzip=True)
-        self.write_message("Saved project file %s" % (filename))
+        self.write_message(f"Saved project file {filename}")
         self.last_athena_file = filename
 
     def onPreferences(self, evt=None):
@@ -1032,33 +1074,34 @@ class LarixFrame(wx.Frame):
             ExceptionPopup(self, title, message)
             return
 
-        LoadSessionDialog(self, _session, path, self.controller).Show()
-        self.last_session_read = path
+        loader = LoadSessionDialog(self, _session, path, self.controller)
+        loader.Show()
         fpath = Path(path).absolute()
         fname = fpath.name
+        self.controller.set_session_name(fname)
+
         fdir = fpath.parent.as_posix()
         if self.controller.chdir_on_fileopen() and len(fdir) > 0:
             os.chdir(fdir)
             self.controller.set_workdir()
+        wx.CallAfter(loader.Raise)
 
-        self.onSetTitle()
 
     def onSaveSessionAs(self, evt=None):
         groups = self.controller.filelist.GetItems()
         if len(groups) < 1:
             return
-        self.last_session_file = None
-        self.onSaveSession()
+        self.onSaveSession(prompt=True)
 
-    def onSaveSession(self, evt=None):
+    def onSaveSession(self, evt=None, prompt=False):
         groups = self.controller.filelist.GetItems()
         if len(groups) < 1:
             return
         self.controller.sync_xasgroups()
 
-        fname = self.last_session_file
-        if fname is None:
-            fname = self.last_session_read
+        fname = self.controller.session_filename
+        warn_overwrite = self.controller.session_warn_overwrite
+        if prompt or fname is None:
             if fname is None:
                 fname = time.strftime('%Y%b%d_%H%M') + '.larix'
 
@@ -1068,20 +1111,24 @@ class LarixFrame(wx.Frame):
                              default_file=fname, wildcard=wcards)
             if fname is None:
                 return
+            # Note: darwin prompts in FileSave!
+            warn_overwrite = warn_overwrite or (Path(fname).exists() and uname != 'darwin')
 
-            if Path(fname).exists() and uname != 'darwin':  # darwin prompts in FileSave!
-                if wx.ID_YES != Popup(self, "Overwrite existing Project File?",
-                                      "Overwrite existing file?", style=wx.YES_NO):
-                    return
+        if warn_overwrite and Path(fname).exists():
+            if wx.ID_YES != Popup(self, "Overwrite existing Project File?",
+                                 "Overwrite existing file?", style=wx.YES_NO):
+                return
 
         save_session(fname=fname, _larch=self.larch._larch)
+        sess_name = Path(fname).name
+        self.controller.set_session_name(sess_name, warn_overwrite=False)
+
         self.controller.recentfiles.insert(0, (time.time(), fname))
         self.get_recent_session_menu()
         stime = time.strftime("%H:%M")
         self.last_save_message = ("Session last saved", f"'{fname}'", f"{stime}")
         self.write_message(f"Saved session to '{fname}' at {stime}")
-        self.last_session_file = self.last_session_read = fname
-        self.onSetTitle(Path(fname).name)
+
 
     def onClearSession(self, evt=None):
         conf = self.controller.get_config('autosave',
@@ -1094,7 +1141,7 @@ class LarixFrame(wx.Frame):
 before clearing"""
 
         dlg = wx.Dialog(None, -1, title="Clear all Session data?", size=(550, 300))
-        dlg.SetFont(Font(FONTSIZE))
+        dlg.SetFont(get_font())
         panel = GridPanel(dlg, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
         panel.Add(wx.StaticText(panel, label="Clear all Session Data?"), dcol=2)
@@ -1120,8 +1167,8 @@ before clearing"""
         if fname is None:
             fname = self.controller.filelist.GetStringSelection()
         ogroup = self.controller.get_group(fname)
-        ngroup = self.controller.copy_group(fname)
-        self.install_group(ngroup, journal=ogroup.journal)
+        ngroup = self.controller.copy_group(ogroup.filename)
+        self.install_group(ngroup, filename=ngroup.filename, journal=ogroup.journal)
 
     def onGroupJournal(self, event=None):
         dgroup = self.controller.get_group()
@@ -1331,6 +1378,8 @@ before clearing"""
             except Exception:
                 pass
 
+        self.controller.delete_lockfile()
+
         def destroy(wid):
             if hasattr(wid, 'Destroy'):
                 try:
@@ -1454,6 +1503,9 @@ before clearing"""
         self.larch.eval("_specfile = specfile('{path:s}')".format(path=path))
         dgroup = None
         fname = Path(path).name
+
+        if self.controller.session_name in ('', None):
+            self.controller.set_session_name(fname)
         # first_group = None
         cur_panel = self.nb.GetCurrentPage()
         cur_panel.skip_plotting = True
@@ -1536,6 +1588,8 @@ before clearing"""
         self.larch.eval("_data_source = open_xas_source('{path:s}')".format(path=path))
         dgroup = None
         fname = Path(path).name
+        if self.controller.session_name in ('', None):
+            self.controller.set_session_name(fname)
         first_group = None
         cur_panel = self.nb.GetCurrentPage()
         cur_panel.skip_plotting = True
@@ -1577,7 +1631,11 @@ before clearing"""
 
     def onReadAthenaProject_OK(self, path, namelist):
         """read groups from a list of groups from an athena project file"""
-        self.larch.eval("_prj = read_athena('{path:s}', do_fft=False, do_bkg=False)".format(path=path))
+        self.larch.eval(f"_prj = read_athena('{path}')")
+
+        if self.controller.session_name in ('', None):
+            self.controller.set_session_name(Path(path).name)
+
         dgroup = None
         script = "{group:s} = _prj.{prjgroup:s}"
         cur_panel = self.nb.GetCurrentPage()
@@ -1586,6 +1644,7 @@ before clearing"""
         parent, spath = path_split(path)
         labels = []
         groups_added = []
+
 
         gid = None
         for ig, gname in enumerate(namelist):
@@ -1609,7 +1668,6 @@ before clearing"""
             groups_added.append(gid)
 
         for gid in groups_added:
-            rgroup = gid
             dgroup = self.larch.symtable.get_group(gid)
 
             conf_xasnorm = dgroup.config.xasnorm
@@ -1622,7 +1680,10 @@ before clearing"""
             # norm
             for attr in ('e0', 'pre1', 'pre2', 'nnorm'):
                 if hasattr(abkg, attr):
-                    conf_xasnorm[attr] = float(getattr(abkg, attr))
+                    val = float(getattr(abkg, attr))
+                    conf_xasnorm[attr] = val
+                    if attr == 'e0':
+                        dgroup.e0 = val
 
             for attr, alt in (('norm1', 'nor1'), ('norm2', 'nor2'),
                               ('edge_step', 'step')):
@@ -1633,9 +1694,9 @@ before clearing"""
                 conf_xasnorm['auto_step'] = (a < 0.5)
 
             # bkg
-            for attr in ('e0', 'rbkg'):
+            for attr, oattr in (('e0', 'ek0'), ('rbkg', 'rbkg')):
                 if hasattr(abkg, attr):
-                    conf_exafs[attr] = float(getattr(abkg, attr))
+                    conf_exafs[oattr] = float(getattr(abkg, attr))
 
             for attr, alt in (('bkg_kmin', 'spl1'), ('bkg_kmax', 'spl2'),
                               ('bkg_kweight', 'kw'), ('bkg_clamplo', 'clamp1'),
@@ -1696,6 +1757,9 @@ before clearing"""
         overwrite: whether to overwrite the current datagroup, as when
         editing a datagroup
         """
+        if self.controller.session_name in ('', None):
+            self.controller.set_session_name(Path(path).name)
+
         filedir, spath = path_split(path)
         filename = config.get('filename', spath)
         groupname = config.get('groupname', None)
@@ -1747,7 +1811,6 @@ before clearing"""
             journal['yerr'] = array_desc['yerr'].format(group=groupname)
 
         self.install_group(groupname, filename, source=path, journal=journal, plot='auto')
-
         dtype = getattr(config, 'datatype', 'xydata')
 
         def install_multichans(config):
@@ -1877,6 +1940,7 @@ before clearing"""
     def install_group(self, groupname, filename=None, source=None, journal=None,
                       process=True, plot='auto'):
         """add groupname / filename to list of available data groups"""
+        # print(f"install_group A {groupname=} / {filename=}")
         if isinstance(groupname, Group):
             dgroup = groupname
             groupname = groupname.groupname
@@ -1886,12 +1950,17 @@ before clearing"""
         if filename is None:
             filename = dgroup.filename
 
+        if self.controller.session_name in ('', None):
+            self.controller.set_session_name(filename)
+
         self.controller.install_group(groupname, filename,
                                       source=source, journal=journal)
         dtype = getattr(dgroup, 'datatype', 'xydata')
         startpage = 'xasnorm' if dtype == 'xas' else 'xydata'
         ipage, pagepanel = self.get_nbpage(startpage)
         self.nb.SetSelection(ipage)
+        # print(f"install_group B {groupname=} / {filename=}")
+
         self.ShowFile(groupname=groupname, filename=filename,
                       process=process, plot=plot)
 
@@ -1920,9 +1989,8 @@ before clearing"""
         and avoiding saving sessions while program is inactive.
         """
         conf = self.controller.get_config('autosave', {})
-        savetime = conf.get('savetime', 600)
+        savetime = conf.get('savetime', 300)
         symtab = self.larch.symtable
-
         if (time.time() > self.last_autosave + savetime and
             symtab._sys.last_eval_time > (self.last_autosave+60) and
             len(symtab._xasgroups) > 0):
@@ -1932,7 +2000,6 @@ before clearing"""
     def autosave_session(self, event=None):
         """autosave session now"""
         savefile = self.controller.autosave_session()
-        # save_session(savefile, _larch=self.larch._larch)
         self.last_autosave = time.time()
         stime = time.strftime("%H:%M")
         self.last_save_message = ("Session last saved", f"'{savefile}'", f"{stime}")

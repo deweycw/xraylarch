@@ -17,7 +17,7 @@ include = ["larch", "larch.bin", "larch.bin.darwin64", "larch.bin.win64",
 [project]
 name = "xraylarch"
 dynamic = ["version"]
-requires-python = ">= 3.9"
+requires-python = ">= 3.10"
 description = "Synchrotron X-ray data analysis in python"
 readme = "README.md"
 
@@ -35,7 +35,6 @@ classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -45,11 +44,11 @@ classifiers = [
 dependencies = ["numpy>=1.23",
     "scipy>=1.12",
     "lmfit>=1.3.1",
-    "asteval>=1.0.4",
+    "asteval>=1.0.6",
     "uncertainties>=3.2.1",
     "pyshortcuts>=1.9.5",
     "xraydb>=4.5.6",
-    "larixite",
+    "larixite>=2025.5.1",
     "silx>=0.15.2",
     "matplotlib>=3.8",
     "sqlalchemy>=2.0",
@@ -61,7 +60,8 @@ dependencies = ["numpy>=1.23",
     "packaging",
     "pip",
     "pyyaml",
-    "toml",
+    "tomli",
+    "tomli_w",
     "termcolor",
     "dill",
     "imageio",
@@ -70,13 +70,9 @@ dependencies = ["numpy>=1.23",
     "scikit-image",
     "scikit-learn",
     "psutil",
-    "pymatgen>=2024.8.9",
-    "mp_api",
     "fabio",
     "pyfai",
-    "numexpr>=2.8.7",
-    "tabulate",
-    "darkdetect"]
+    "tabulate"]
 
 
 [project.scripts]
@@ -89,6 +85,7 @@ larch_xrf = "larch.apps:run_larch_xrf"
 larch_xrd1d = "larch.apps:run_larch_xrd1d"
 gse_mapviewer = "larch.apps:run_gse_mapviewer"
 epics_xrf = "larch.apps:run_epics_xrf"
+larch_jupyterlab = "larch.apps:run_larch_jupyterlab"
 
 [project.urls]
 Homepage = " https://github.com/xraypy/xraylarch"
@@ -99,7 +96,7 @@ Tracker = "https://github.com/xraypy/xraylarch/issues"
 dev = ["build", "twine", "pre-commit", "pytest", "pytest-xvfb", "pytest-cov", "coverage"]
 doc = ["Sphinx", "sphinx-copybutton", "sphinxcontrib-video", "sphinxcontrib-bibtex", "sphinxcontrib-argdoc"]
 
-wxgui = ["wxpython>=4.2.1",  "wxmplot>=2025.1.1", "wxutils>=0.3.4", "darkdetect"]
+wxgui = ["wxpython>=4.2.2",  "wxmplot>=2025.1.5", "wxutils>=0.3.6", "darkdetect"]
 
 qtgui = ["PyQt5", "pyqtwebengine", "pyqtgraph"]
 

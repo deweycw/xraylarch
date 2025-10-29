@@ -156,15 +156,8 @@ class AddColumnsFrame(wx.Frame):
         xplot = self.group.xplot
         label = self.get_label()
         label = "%s (not saved)" % label
-        popts = dict(
-            marker="o",
-            markersize=4,
-            linewidth=1.5,
-            ylabel=label,
-            label=label,
-            xlabel=self.group.plot_xlabel,
-        )
-        self.parent.plotpanel.plot(xplot, yplot, **popts)
+        self.parent.plotpanel.plot(xplot, yplot, label=label,
+            xlabel=self.group.plot_xlabel, ylabel=label)
 
     def onSelColumns(self, event=None):
         pattern = self.wids["tc_nums"].GetValue().split(",")
@@ -297,15 +290,9 @@ class EditColumnFrame(wx.Frame):
             x = self.parent.workgroup.index
             y = self.parent.workgroup.data[index, :]
             label = self.wids["ret_%i" % index].GetLabel()
-            popts = dict(
-                marker="o",
-                markersize=4,
-                linewidth=1.5,
-                ylabel=label,
-                xlabel="data point",
-                label=label,
-            )
-            self.parent.plotpanel.plot(x, y, **popts)
+
+            self.parent.plotpanel.plot(x, y, label=label,
+                              xlabel="data point", ylabel=label)
 
     def onColNumber(self, evt=None, index=-1):
         for name, wid in self.wids.items():
@@ -540,20 +527,11 @@ class XasImporter(wx.Frame):
         pack(rtop, sizer)
 
         self.nb = fnb.FlatNotebook(rightpanel, -1, agwStyle=FNB_STYLE)
-        # self.nb.SetTabAreaColour(wx.Colour(248, 248, 240))
-        # self.nb.SetActiveTabColour(wx.Colour(254, 254, 195))
-        # self.nb.SetNonActiveTabTextColour(wx.Colour(40, 40, 180))
-        # self.nb.SetActiveTabTextColour(wx.Colour(80, 0, 0))
 
         self.plotpanel = PlotPanel(rightpanel, messenger=self.plot_messages)
-        try:
-            plotopts = self._larch.symtable._sys.wx.plotopts
-            self.plotpanel.conf.set_theme(plotopts["theme"])
-            self.plotpanel.conf.enable_grid(plotopts["show_grid"])
-        except Exception:
-            pass
-
-        self.plotpanel.SetMinSize((300, 250))
+        from .plotter import get_plot_config
+        self.plotpanel.set_config(**get_plot_config())
+        self.plotpanel.SetMinSize((250, 250))
 
         shead = wx.Panel(rightpanel)
         self.scaninfo = wx.TextCtrl(
@@ -1057,17 +1035,11 @@ class XasImporter(wx.Frame):
             workgroup.scale = np.ptp(workgroup.y+1.e-15)
 
         fname = Path(workgroup.filename).name
-        popts = dict(
-            marker="o",
-            markersize=4,
-            linewidth=1.5,
-            title=fname,
-            ylabel=ylabel,
-            xlabel=xlabel,
-            label="%s: %s" % (fname, workgroup.plot_ylabel),
-        )
         try:
-            self.plotpanel.plot(workgroup.xplot, workgroup.yplot, **popts)
+            self.plotpanel.plot(workgroup.xplot, workgroup.yplot,
+                           title=fname, ylabel=ylabel, xlabel=xlabel,
+            label=f"{fname}: {workgroup.plot_ylabel}")
+
         except Exception:
             pass
 

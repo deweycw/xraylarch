@@ -7,7 +7,6 @@ import os
 from datetime import datetime
 import ast
 import traceback
-import toml
 import inspect
 from collections import namedtuple
 from pathlib import Path
@@ -19,6 +18,18 @@ from .symboltable import Group, isgroup
 from .site_config import user_larchdir
 from .closure import Closure
 from .utils import uname, bindir, get_cwd, read_textfile
+
+import yaml
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+
+try:
+    import tomli_w
+    HAS_TOMLI_W = True
+except:
+    HAS_TOMLI_W = False
 
 HAS_TERMCOLOR = False
 try:
@@ -423,27 +434,40 @@ def read_config(conffile):
 
     returns dictionary / configuration
     """
-    cfile = Path(user_larchdir, conffile).absolute()
+    cfile = Path(conffile).absolute()
     out = None
+    readers = [yaml.safe_load, tomllib.loads]
+    if cfile.name.endswith('.toml'):
+        readers = [yaml.safe_load, tomllib.loads]
+
     if cfile.exists():
         data = read_textfile(cfile)
-        try:
-            out = toml.loads(data)
-        except:
-            pass
+        success = False
+        for reader in readers:
+            try:
+                out = reader(data)
+                success = True
+            except Exception:
+                pass
+            if success:
+                break
     return out
 
-def save_config(conffile, config):
-    """write yaml config file in the users larch dir
+def save_config(conffile, config, form='yaml'):
+    """write toml/yaml config file in the users larch dir
     compare read_confif(conffile) which will read this value
-
     """
-    cfile = Path(user_larchdir, conffile).absolute()
-    dat = toml.dumps(config).encode('utf-8')
-    with open(cfile, 'wb') as fh:
-        fh.write(dat)
-    #except:
-    #    print(f"Could not save configuration file '{conffile:s}'")
+    cfile = Path(conffile).absolute()
+    if form == 'toml':
+        if HAS_TOMLI_W:
+            dat = tomli_w.dumps(config)
+        else:
+            dat = tomllib.dumps(config)
+    else:
+        dat = yaml.dump(config, default_flow_style=None,
+                        indent=5, sort_keys=False)
+    with open(conffile, 'wb') as fh:
+        fh.write(dat.encode('utf-8'))
 
 def parse_group_args(arg0, members=None, group=None, defaults=None,
                      fcn_name=None, check_outputs=True):

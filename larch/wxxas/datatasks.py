@@ -15,7 +15,9 @@ from larch.utils import path_split
 from larch.wxlib import (GridPanel, FloatCtrl, FloatSpin,
                          FloatSpinWithPin, SimpleText, Choice, SetTip,
                          Button, HLine, LEFT, pack,
-                         plotlabels, Font, FONTSIZE, FRAMESTYLE)
+                         plotlabels, get_font, FRAMESTYLE, get_zorders,
+                         get_panel_plot_config, set_panel_plot_config,
+                         get_markercolors, set_plotwindow_title)
 
 from larch.xafs import etok, ktoe, find_energy_step
 from larch.utils.physical_constants import ATOM_SYMS
@@ -72,13 +74,17 @@ class OverAbsorptionFrame(wx.Frame):
 
         self.label = label
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+
+        self.no_plot = False
 
         self.data = [self.dgroup.energy[:], self.dgroup.norm[:]]
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400),
                           style=FRAMESTYLE)
         self.SetTitle("Correct Over-absorption")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
         self.wids = wids = {}
 
@@ -144,6 +150,8 @@ class OverAbsorptionFrame(wx.Frame):
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def set_default_elem_edge(self, dgroup):
@@ -202,8 +210,12 @@ class OverAbsorptionFrame(wx.Frame):
         ngroup.journal.add('fluor_correction_command', self.cmd)
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
-
+        if self.no_plot:
+            return
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('OverAbsorption')
+        set_plotwindow_title(disp, self.controller.larch)
         dgroup = self.dgroup
         xlim, ylim = get_view_limits(ppanel)
         path, fname = path_split(dgroup.filename)
@@ -219,11 +231,13 @@ class OverAbsorptionFrame(wx.Frame):
         if not hasattr(dgroup, 'norm_corr'):
             dgroup.norm_corr = dgroup.norm[:]
 
-        ppanel.plot(dgroup.energy, dgroup.norm_corr, zorder=10, marker=None,
+
+        ppanel.plot(dgroup.energy, dgroup.norm_corr, marker=None,
                     title='Over-absorption Correction:\n %s' % fname,
                     label='corrected', **opts)
-
-        ppanel.oplot(dgroup.energy, dgroup.norm, zorder=10, marker='o',
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] - 2
+        ppanel.oplot(dgroup.energy, dgroup.norm, zorder=znext, marker='o',
                      markersize=3, label='original', **opts)
         if use_zoom:
             set_view_limits(ppanel, xlim, ylim)
@@ -240,6 +254,9 @@ class EnergyCalibrateFrame(wx.Frame):
         self.dgroup = self.controller.get_group()
         self.label = label
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+        self.no_plot = False
 
         ensure_en_orig(self.dgroup)
 
@@ -248,7 +265,7 @@ class EnergyCalibrateFrame(wx.Frame):
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400), style=FRAMESTYLE)
         self.SetTitle("Calibrate / Align Energy")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
 
         self.wids = wids = {}
@@ -359,6 +376,8 @@ class EnergyCalibrateFrame(wx.Frame):
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def on_groupname(self, event=None):
@@ -465,8 +484,13 @@ class EnergyCalibrateFrame(wx.Frame):
         ngroup.journal.add('energy_shift ', 0.0)
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
-        ppanel.oplot
+        if self.no_plot:
+            return
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('EnergyCalib')
+        set_plotwindow_title(disp, self.controller.larch)
+
         xnew, ynew = self.data
         dgroup = self.dgroup
 
@@ -499,13 +523,13 @@ class EnergyCalibrateFrame(wx.Frame):
         if use_deriv:
             yold = np.gradient(yold)/np.gradient(xold)
 
-        ppanel.plot(xold, yold, zorder=10, marker='o', markersize=3,
-                     label='original', linewidth=2, color='#1f77b4',
+        ppanel.plot(xold, yold,  marker='o', markersize=3,
+                     label='original',
                      title=f'Energy Calibration:\n {fname}', **opts)
-
-        ppanel.oplot(xnew, ynew, zorder=15, marker='+', markersize=3,
-                    linewidth=2, label='shifted',
-                    color='#d62728', **opts)
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] + 2
+        ppanel.oplot(xnew, ynew, zorder=znext, marker='+', markersize=3,
+                     label='shifted', **opts)
 
         if wids['reflist'].GetStringSelection() != 'None':
             refgroup = self.controller.get_group(wids['reflist'].GetStringSelection())
@@ -513,7 +537,7 @@ class EnergyCalibrateFrame(wx.Frame):
             if use_deriv:
                 yref = np.gradient(yref)/np.gradient(xref)
 
-            ppanel.oplot(xref, yref, style='solid', zorder=5, color='#2ca02c',
+            ppanel.oplot(xref, yref, style='solid', zorder=znext-5,
                          marker=None, label=refgroup.filename, **opts)
         if use_zoom:
             set_view_limits(ppanel, xlim, ylim)
@@ -529,6 +553,10 @@ class RebinDataFrame(wx.Frame):
         self.dgroup = self.controller.get_group()
         self.label = label
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+        self.no_plot = False
+
 
         xmin = min(self.dgroup.energy)
         xmax = max(self.dgroup.energy)
@@ -539,7 +567,7 @@ class RebinDataFrame(wx.Frame):
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400), style=FRAMESTYLE)
         self.SetTitle("Rebin mu(E) Data")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
         self.wids = wids = {}
@@ -625,6 +653,8 @@ class RebinDataFrame(wx.Frame):
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def on_groupname(self, event=None):
@@ -704,7 +734,14 @@ class RebinDataFrame(wx.Frame):
         ngroup.journal.add('rebin_command ', self.cmd)
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
+        if self.no_plot:
+            return
+
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('EnergyRebin')
+        set_plotwindow_title(disp, self.controller.larch)
+
         xnew, ynew, yerr, e0 = self.data
         dgroup = self.dgroup
         xlim, ylim = get_view_limits(ppanel)
@@ -715,14 +752,15 @@ class RebinDataFrame(wx.Frame):
             opts['xmin'] = dgroup.e0 + self.controller.plot_erange[0]
             opts['xmax'] = dgroup.e0 + self.controller.plot_erange[1]
 
-        ppanel.plot(xnew, ynew, zorder=20, marker='square',
-                    linewidth=3, title='Enegy rebinning:\n %s' % fname,
+        ppanel.plot(xnew, ynew, marker='square',
+                    title='Enegy rebinning:\n %s' % fname,
                     label='rebinned', xlabel=plotlabels.energy,
                     ylabel=plotlabels.mu, **opts)
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] - 2
 
         xold, yold = self.dgroup.energy, self.dgroup.mu
-        ppanel.oplot(xold, yold, zorder=10,
-                     marker='o', markersize=4, linewidth=2.0,
+        ppanel.oplot(xold, yold, zorder=znext, marker='o',
                      label='original', show_legend=True, **opts)
         if use_zoom:
             set_view_limits(ppanel, xlim, ylim)
@@ -737,12 +775,15 @@ class SmoothDataFrame(wx.Frame):
         self.dgroup = self.controller.get_group()
         self.label = label
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+        self.no_plot = False
 
         self.data = [self.dgroup.energy[:], self.dgroup.mu[:]]
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400), style=FRAMESTYLE)
         self.SetTitle("Smooth mu(E) Data")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
 
         self.wids = wids = {}
@@ -814,6 +855,8 @@ class SmoothDataFrame(wx.Frame):
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def on_groupname(self, event=None):
@@ -892,7 +935,14 @@ class SmoothDataFrame(wx.Frame):
 
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
+        if self.no_plot:
+            return
+
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('Smoothing')
+        set_plotwindow_title(disp, self.controller.larch)
+
         xnew, ynew = self.data
         dgroup = self.dgroup
         path, fname = path_split(dgroup.filename)
@@ -903,14 +953,14 @@ class SmoothDataFrame(wx.Frame):
             opts['xmin'] = dgroup.e0 + self.controller.plot_erange[0]
             opts['xmax'] = dgroup.e0 + self.controller.plot_erange[1]
 
-        ppanel.plot(xnew, ynew, zorder=20, marker=None,
-                    linewidth=3, title='Smoothing:\n %s' % fname,
+        ppanel.plot(xnew, ynew, marker=None,
+                    title='Smoothing:\n %s' % fname,
                     label='smoothed', xlabel=plotlabels.energy,
                     ylabel=plotlabels.mu, **opts)
-
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] - 2
         xold, yold = self.dgroup.energy, self.dgroup.mu
-        ppanel.oplot(xold, yold, zorder=10,
-                     marker='o', markersize=4, linewidth=2.0,
+        ppanel.oplot(xold, yold, zorder=znext,  marker='o',
                      label='original', show_legend=True, **opts)
         if use_zoom:
             set_view_limits(ppanel, xlim, ylim)
@@ -925,6 +975,9 @@ class DeconvolutionFrame(wx.Frame):
         self.dgroup = self.controller.get_group()
         self.label = label
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+        self.no_plot = False
 
         # groupnames = list(self.controller.file_groups.keys())
 
@@ -933,7 +986,7 @@ class DeconvolutionFrame(wx.Frame):
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400), style=FRAMESTYLE)
         self.SetTitle("Deconvolve mu(E) Data")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
 
         self.wids = wids = {}
@@ -979,6 +1032,8 @@ class DeconvolutionFrame(wx.Frame):
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def on_saveas(self, event=None):
@@ -1029,7 +1084,14 @@ class DeconvolutionFrame(wx.Frame):
         self.plot_results()
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
+        if self.no_plot:
+            return
+
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('Deconvolution')
+        set_plotwindow_title(disp, self.controller.larch)
+
         xnew, ynew = self.data
         dgroup = self.dgroup
         xlim, ylim = get_view_limits(ppanel)
@@ -1040,14 +1102,14 @@ class DeconvolutionFrame(wx.Frame):
             opts['xmin'] = dgroup.e0 + self.controller.plot_erange[0]
             opts['xmax'] = dgroup.e0 + self.controller.plot_erange[1]
 
-        ppanel.plot(xnew, ynew, zorder=20, marker=None,
-                    linewidth=3, title='Deconvolving:\n %s' % fname,
+        ppanel.plot(xnew, ynew, marker=None,
+                    title='Deconvolving:\n %s' % fname,
                     label='deconvolved', xlabel=plotlabels.energy,
                     ylabel=plotlabels.mu, **opts)
-
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] - 2
         xold, yold = self.dgroup.energy, self.dgroup.norm
-        ppanel.oplot(xold, yold, zorder=10,
-                     marker='o', markersize=4, linewidth=2.0,
+        ppanel.oplot(xold, yold, zorder=znext,  marker='o',
                      label='original', show_legend=True, **opts)
         if use_zoom:
             set_view_limits(ppanel, xlim, ylim)
@@ -1059,7 +1121,11 @@ class DeglitchFrame(wx.Frame):
         self.parent = parent
         self.controller = controller
         self.label = label
+        self.last_plottype = None
         self.controller.register_group_callback(label, self, self.on_groupname)
+        self.plotpanel = self.controller.get_display(stacked=False).panel
+        self.plot_conf = get_panel_plot_config(self.plotpanel)
+        self.no_plot = False
         self.wids = {}
         self.plot_markers = None
         self.dgroup = self.controller.get_group()
@@ -1073,7 +1139,7 @@ class DeglitchFrame(wx.Frame):
 
         wx.Frame.__init__(self, parent, -1, size=(550, 400), style=FRAMESTYLE)
         self.SetTitle("Select Points to Remove")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
         wids = self.wids
 
@@ -1167,9 +1233,12 @@ class DeglitchFrame(wx.Frame):
         self.dgroup = self.controller.get_group()
         self.wids['grouplabel'].SetLabel(self.dgroup.filename)
         self.wids['save_as_name'].SetValue(self.dgroup.filename + '_clean')
+        self.reset_data_history()
 
     def onDone(self, event=None):
         self.controller.unregister_group_callback(self.label)
+        self.no_plot = True
+        set_panel_plot_config(self.plotpanel, **self.plot_conf)
         self.Destroy()
 
     def reset_data_history(self):
@@ -1204,7 +1273,6 @@ class DeglitchFrame(wx.Frame):
     def on_rangechoice(self, event=None):
         sel = self.choice_range.GetStringSelection()
         self.wids['range2'].Enable(sel == 'between')
-
 
     def on_plotchoice(self, event=None):
         plotstr = self.wids['plotopts'].GetStringSelection()
@@ -1256,22 +1324,32 @@ class DeglitchFrame(wx.Frame):
         energies_removed  = xplot[np.where(~mask)].tolist()
         dgroup.energy = dgroup.xplot = xplot[mask]
         dgroup.mu     = dgroup.yplot = yplot[mask]
+
         self.reset_data_history()
         dgroup.journal.add('deglitch_removed_energies', energies_removed)
         self.parent.process_normalization(dgroup)
         self.plot_results()
 
     def on_saveas(self, event=None):
-        fname = self.controller.get_group().filename
-        new_fname = self.wids['save_as_name'].GetValue()
-        ngroup = self.controller.copy_group(fname, new_filename=new_fname)
+        fname = self.dgroup.filename
         xplot, yplot = self.get_xydata(datatype='mu')
+
+        new_fname = self.wids['save_as_name'].GetValue()
+        ngroup = self.controller.copy_group(fname, new_filename=new_fname,
+                                  new_groupname=self.dgroup.groupname+'_clean')
         mask = self.xmasks[-1]
         energies_removed  = xplot[np.where(~mask)].tolist()
 
         ngroup.energy = ngroup.xplot = xplot[mask]
         ngroup.mu     = ngroup.yplot = yplot[mask]
-        ngroup.energy_orig = 1.0*ngroup.energy
+        ngroup.energy_orig = 1.0*ngroup.energy_orig[mask]
+        has_chik = hasattr(ngroup, 'chi')
+        has_mback = hasattr(ngroup, 'norm_mback')
+        for attr in ('pre_edge', 'norm', 'norm_poly', 'norm_mback',
+                     'edge_step','edge_step_mback', 'k', 'bkg',
+                     'chi', 'chir_mag'):
+            if hasattr(ngroup, attr):
+                delattr(ngroup, attr)
 
         ogroup = self.controller.get_group(fname)
         olddesc = ogroup.journal.get('source_desc').value
@@ -1280,19 +1358,27 @@ class DeglitchFrame(wx.Frame):
         ngroup.journal.add('source_desc', f"deglitched({olddesc})")
         ngroup.journal.add('deglitch_removed_energies', energies_removed)
 
-        self.parent.process_normalization(ngroup)
+        self.parent.process_normalization(ngroup, force=True, force_mback=has_mback)
+        if has_chik:
+            self.parent.process_exafs(ngroup, force=True)
 
     def plot_results(self, event=None, use_zoom=True):
-        ppanel = self.controller.get_display(stacked=False).panel
+        if self.no_plot:
+            return
+
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('Deglitch')
+        set_plotwindow_title(disp, self.controller.larch)
 
         xplot, yplot = self.data
         dgroup = self.dgroup
-
         path, fname = path_split(dgroup.filename)
 
         plotstr = self.wids['plotopts'].GetStringSelection()
         plottype = DEGLITCH_PLOTS[plotstr]
-
+        same_plottype = (plottype == self.last_plottype)
+        self.last_plottype = plottype
         xlabel=plotlabels.energy
         if plottype in ('chie', 'chiew'):
             # xmin = self.dgroup.e0
@@ -1310,23 +1396,24 @@ class DeglitchFrame(wx.Frame):
         dgroup.plot_xlabel = xlabel
         dgroup.plot_ylabel = ylabel
 
-        xlim, ylim = get_view_limits(ppanel)
-
-        ppanel.plot(xplot, yplot, zorder=10, marker=None, linewidth=3,
+        if same_plottype:
+            xlim, ylim = get_view_limits(ppanel)
+        ppanel.plot(xplot, yplot, marker=None,
                     label='original', ylabel=ylabel, **opts)
+        zorders = get_zorders(panel=ppanel)
+        znext = zorders[0] + 2
 
         if len(self.xmasks) > 1:
             mask = self.xmasks[-1]
-            ppanel.oplot(xplot[mask], yplot[mask], zorder=15,
-                         marker='o', markersize=3, linewidth=2.0,
-                         label='current', show_legend=True, **opts)
+            ppanel.oplot(xplot[mask], yplot[mask], zorder=znext,
+                         marker='o', label='current', show_legend=True, **opts)
 
         def ek_formatter(x, pos):
             ex = float(x) - self.dgroup.e0
             s = '' if ex < 0 else '\n[%.1f]' % (etok(ex))
-            return r"%1.4g%s" % (x, s)
+            return r"%.0f%s" % (x, s)
 
-        if use_zoom:
+        if use_zoom and same_plottype:
             set_view_limits(ppanel, xlim, ylim)
         if plottype in ('chie', 'chiew'):
             ppanel.axes.xaxis.set_major_formatter(FuncFormatter(ek_formatter))
@@ -1334,8 +1421,15 @@ class DeglitchFrame(wx.Frame):
         if self.plot_markers is not None:
             rchoice = self.choice_range.GetStringSelection().lower()
             xwork, ywork = self.data
-            opts = dict(marker='o', markersize=6, zorder=2, label='_nolegend_',
-                        markerfacecolor='#66000022', markeredgecolor='#440000')
+            zorders = get_zorders(panel=ppanel)
+            znext = zorders[0] - 2
+            pconf = get_panel_plot_config(self.plotpanel)
+            col_edge, col_face = get_markercolors(trace=2,
+                                                  linecolors=pconf['linecolors'],
+                                                  facecolor=pconf['facecolor'])
+
+            opts = dict(marker='o', markersize=6, zorder=znext, label='bad points',
+                        markerfacecolor=col_face, markeredgecolor=col_edge)
             if self.plot_markers == 'xlast':
                 bad = index_nearest(xwork, self.wids['xlast'].GetValue())
                 ppanel.axes.plot([xwork[bad]], [ywork[bad]], **opts)
@@ -1390,10 +1484,9 @@ class SpectraCalcFrame(wx.Frame):
 
         self.data = [self.dgroup.energy[:], self.dgroup.norm[:]]
 
-
         wx.Frame.__init__(self, parent, -1, size=(475, 525), style=FRAMESTYLE)
         self.SetTitle("Spectra Calculations: Add, Subtract Spectra")
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=4, itemstyle=LEFT)
 
         def add_text(text, dcol=1, newrow=True):
@@ -1472,6 +1565,11 @@ class SpectraCalcFrame(wx.Frame):
         xname = 'energy'
         if not hasattr(group_a, xname):
             xname = 'xplot'
+
+        disp = self.controller.get_display(stacked=False)
+        ppanel = disp.panel
+        self.controller.set_datatask_name('Spectra Calc')
+        set_plotwindow_title(disp, self.controller.larch)
 
         cmds = [SPECCALC_SETUP.format(group=group_a.groupname,
                                       xname=xname, yname=self.yname)]

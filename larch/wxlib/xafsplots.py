@@ -23,7 +23,7 @@ from numpy import ndarray, diff, where, arange, argmin
 from matplotlib.ticker import FuncFormatter
 
 from larch import Group
-from larch.math import index_of
+from larch.math import index_of, index_nearest, interp1d
 from larch.xafs import cauchy_wavelet, etok
 
 try:
@@ -32,12 +32,17 @@ try:
 except ImportError:
     HAS_WXPYTHON = False
 
+get_display = _plot = _oplot = None
+_fitplot = _plot_marker = _plot_axvline = None
+def get_zorders(*args):
+    return [0]
+def get_markercolors(trace=1, **kws):
+    return '#AA0000', '#99887780'
+
 if HAS_WXPYTHON:
     from .plotter import (get_display, _plot, _oplot,  _fitplot,
-                         _plot_marker, _plot_axvline, _imshow)
-else:
-    get_display = _plot = _oplot = None
-    _fitplot = _plot_marker = _plot_axvline = None
+                         _plot_marker, _plot_axvline, _imshow,
+                         get_zorders,  get_markercolors)
 
 LineColors = ('#1f77b4', '#d62728', '#2ca02c', '#ff7f0e', '#9467bd',
               '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf')
@@ -227,6 +232,10 @@ def plot_mu(dgroup, show_norm=False, show_flat=False,
      1. The input data group must have the following attributes:
          energy, mu, norm, e0, pre_edge, edge_step
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if hasattr(dgroup, 'mu'):
         mu = dgroup.mu
     elif  hasattr(dgroup, 'mutrans'):
@@ -258,9 +267,8 @@ def plot_mu(dgroup, show_norm=False, show_flat=False,
 
     title = _get_title(dgroup, title=title)
 
-    opts = dict(win=win, show_legend=True, linewidth=3,
-                title=title, xmin=emin, xmax=emax, zorder=20,
-                delay_draw=True, _larch=_larch)
+    opts = dict(win=win, show_legend=True, title=title, xmin=emin,
+                xmax=emax, delay_draw=True, _larch=_larch)
 
     _plot(dgroup.energy-en_offset, mu+offset, xlabel=plotlabels.energy, ylabel=ylabel,
           label=label, new=new, **opts)
@@ -317,17 +325,25 @@ def plot_mu(dgroup, show_norm=False, show_flat=False,
                 opts['label'] = f'{label} (MBACK mu, norm)'
             _plot(dgroup.energy-en_offset, mback+offset, **opts)
 
-    marker_popts = {'marker': 'o', 'markersize': 5, 'label': '_nolegend_',
-                    'markerfacecolor': '#888', 'markeredgecolor': '#A00'}
-    disp = get_display(win=win, _larch=_larch)
+    conf = disp.get_config()
+    ntrace = disp.panel.conf.ntrace
+    mcol_edge, mcol_face = get_markercolors(trace=ntrace,
+                                            linecolors=conf['linecolors'],
+                                            facecolor=conf['facecolor'])
+
+    marker_popts = {'marker': 'o', 'markersize': 1+conf['markersize'],
+                    'label': '_nolegend_',
+                    'markerfacecolor': mcol_face, 'markeredgecolor': mcol_edge}
+    zorders = get_zorders(disp)
+    zline = zorders[0] - 2
     axes = disp.panel.axes
     if show_e0:
         if 'vli'in markerstyle.lower():
-            _plot_axvline(dgroup.e0-en_offset, zorder=2, size=3, win=win,
+            _plot_axvline(dgroup.e0-en_offset, zorder=zline, size=3, win=win,
                           label='__nolegend__',color=plotlabels.e0color,
                           _larch=_larch)
         else:
-            ie0 = index_of(dgroup.energy, dgroup.e0)
+            ie0 = index_nearest(dgroup.energy, dgroup.e0)
             axes.plot([dgroup.e0-en_offset], [mu[ie0]+offset], **marker_popts)
 
     if marker_energies is None:
@@ -335,12 +351,13 @@ def plot_mu(dgroup, show_norm=False, show_flat=False,
     for _mark_en in marker_energies:
         ex = dgroup.e0 + _mark_en
         if 'vli'in markerstyle.lower():
-            _plot_axvline(ex-en_offset, zorder=2, size=3, win=win,
+            _plot_axvline(ex-en_offset, zorder=zline, size=3, win=win,
                           label='__nolegend__',color=plotlabels.e0color,
                           _larch=_larch)
         else:
-            ix = index_of(dgroup.energy, ex)
-            axes.plot([ex-en_offset], [mu[ix]+offset], **marker_popts)
+            ix = int(min(len(dgroup.energy)-2, max(0, index_of(dgroup.energy, ex))))
+            mx = interp1d(dgroup.energy[ix:ix+2], mu[ix:ix+2], ex)
+            axes.plot([ex-en_offset], [mx+offset], **marker_popts)
     redraw(win=win, xmin=emin, xmax=emax, _larch=_larch)
 
 def plot_bkg(dgroup, norm=True, emin=None, emax=None, show_e0=False, show_ek0=False,
@@ -372,38 +389,38 @@ def plot_bkg(dgroup, norm=True, emin=None, emax=None, show_e0=False, show_ek0=Fa
      1. The input data group must have the following attributes:
          energy, mu, bkg, norm, e0, pre_edge, edge_step, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     if hasattr(dgroup, 'mu'):
         mu = dgroup.mu
     elif  hasattr(dgroup, 'mutrans'):
         mu = dgroup.mutrans
     else:
         raise ValueError("XAFS data group has no array for mu")
-    #endif
-
     bkg = dgroup.bkg
     ylabel = plotlabels.mu
     if label is None:
         label = 'mu'
-    #endif
+
     emin, emax = _get_erange(dgroup, emin, emax)
     if norm:
         mu  = dgroup.norm
         bkg = (dgroup.bkg - dgroup.pre_edge) / dgroup.edge_step
         ylabel = "%s (norm)" % ylabel
         label = "%s (norm)" % label
-    #endif
+
     title = _get_title(dgroup, title=title)
-    opts = dict(win=win, show_legend=True, linewidth=3,
-                delay_draw=True, _larch=_larch)
+    opts = dict(win=win, show_legend=True, _larch=_larch)
     _plot(dgroup.energy-en_offset, mu+offset, xlabel=plotlabels.energy, ylabel=ylabel,
-         title=title, label=label, zorder=20, new=new, xmin=emin, xmax=emax,
-         **opts)
+         title=title, label=label, new=new, xmin=emin, xmax=emax, **opts)
     ymin, ymax = None, None
-    disp = get_display(win=win, _larch=_larch)
-    if disp is not  None:
-        xylims = disp.panel.get_viewlimits()
-        ymin, ymax = xylims[2], xylims[3]
-    _plot(dgroup.energy-en_offset, bkg+offset, zorder=18, label='bkg', **opts)
+
+    xylims = disp.panel.get_viewlimits()
+    ymin, ymax = xylims[2], xylims[3]
+    zorders = get_zorders(disp)
+    zbkg = zorders[-1] - 2
+    _plot(dgroup.energy-en_offset, bkg+offset, zorder=zbkg, label='bkg', **opts)
 
     e0val = None
     if show_e0 and hasattr(dgroup, 'e0'):
@@ -412,19 +429,23 @@ def plot_bkg(dgroup, norm=True, emin=None, emax=None, show_e0=False, show_ek0=Fa
         e0val = dgroup.ek0
 
     if e0val is not None:
-        ie0 = index_of(dgroup.energy, e0val)
+        ie0 = index_nearest(dgroup.energy, e0val)
         ee0 = dgroup.energy[ie0] - en_offset
         me0 = mu[ie0] + offset
-        disp.panel.axes.plot([ee0], [me0], marker='o',
-                             markersize=5, label='_nolegend_',
-                             markerfacecolor='#808080',
-                             markeredgecolor='#A03030')
+        conf = disp.get_config()
+        ntrace = disp.panel.conf.ntrace
+        mcol_edge, mcol_face = get_markercolors(trace=ntrace,
+                                                linecolors=conf['linecolors'],
+                                                facecolor=conf['facecolor'])
 
-        if disp is not None:
-            disp.panel.conf.draw_legend()
-    #endif
+        disp.panel.axes.plot([ee0], [me0], marker='o',
+                             markersize=conf['markersize'],
+                             label='_nolegend_',
+                             markerfacecolor=mcol_face,
+                             markeredgecolor=mcol_edge)
+        disp.panel.conf.draw_legend()
     redraw(win=win, xmin=emin, xmax=emax, _larch=_larch)
-#enddef
+
 
 def plot_chie(dgroup, emin=-5, emax=None, label=None, title=None,
               eweight=0, show_k=True, new=True, delay_draw=False,
@@ -453,15 +474,22 @@ def plot_chie(dgroup, emin=-5, emax=None, label=None, title=None,
      1. The input data group must have the following attributes:
          energy, mu, bkg, norm, e0, pre_edge, edge_step, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if hasattr(dgroup, 'mu'):
         mu = dgroup.mu
     elif  hasattr(dgroup, 'mutrans'):
         mu = dgroup.mutrans
     else:
         raise ValueError("XAFS data group has no array for mu")
-    #endif
+
     e0   = dgroup.e0
-    chie = mu - dgroup.bkg
+    chie = getattr(dgroup, 'chie', None)
+    if chie is None and hasattr(dgroup, 'bkg') and hasattr(dgroup, 'edge_step'):
+        chie = (mu - dgroup.bkg)/max(1.e-8, dgroup.edge_step)
+
     ylabel = plotlabels.chie
     if abs(eweight) > 1.e-2:
         chie *= (dgroup.energy-e0)**(eweight)
@@ -486,19 +514,16 @@ def plot_chie(dgroup, emin=-5, emax=None, label=None, title=None,
         return r"%1.4g%s" % (x, s)
 
     _plot(dgroup.energy-e0, chie+offset, xlabel=xlabel, ylabel=ylabel,
-          title=title, label=label, zorder=20, new=new, xmin=emin,
-          xmax=emax, win=win, show_legend=True, delay_draw=delay_draw,
-          linewidth=3, _larch=_larch)
+          title=title, label=label, new=new, xmin=emin,
+          xmax=emax, win=win, show_legend=True, delay_draw=delay_draw, _larch=_larch)
 
     if show_k:
-        disp = get_display(win=win, _larch=_larch)
         axes = disp.panel.axes
         axes.xaxis.set_major_formatter(FuncFormatter(ek_formatter))
 
     if not delay_draw:
         redraw(win=win, xmin=emin, xmax=emax, _larch=_larch)
 
-#enddef
 
 def plot_chik(dgroup, kweight=None, kmax=None, show_window=True,
               scale_window=True, label=None, title=None, new=True,
@@ -528,25 +553,30 @@ def plot_chik(dgroup, kweight=None, kmax=None, show_window=True,
      1. The input data group must have the following attributes:
          k, chi, kwin, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     kweight = _get_kweight(dgroup, kweight)
 
     chi = dgroup.chi * dgroup.k ** kweight
-    opts = dict(win=win, show_legend=True, delay_draw=True, linewidth=3,
-                _larch=_larch)
+    opts = dict(win=win, show_legend=True, delay_draw=True, _larch=_larch)
     if label is None:
         label = 'chi'
-    #endif
+
     if new:
         title = _get_title(dgroup, title=title)
     _plot(dgroup.k, chi+offset, xlabel=plotlabels.k,
          ylabel=plotlabels.chikw.format(kweight), title=title,
-         label=label, zorder=20, new=new, xmax=kmax, **opts)
+         label=label, new=new, xmax=kmax, **opts)
 
     if show_window and hasattr(dgroup, 'kwin'):
+        zorders = get_zorders(disp)
+        zwin = zorders[0] - 2
         kwin = dgroup.kwin
         if scale_window:
             kwin *= max(abs(chi))
-        _plot(dgroup.k, kwin+offset, zorder=12, label='window',  **opts)
+        _plot(dgroup.k, kwin+offset, zorder=zwin, label='window',  **opts)
     #endif
     redraw(win=win, xmax=kmax, _larch=_larch)
 #enddef
@@ -581,13 +611,17 @@ def plot_chir(dgroup, show_mag=True, show_real=False, show_imag=False,
      1. The input data group must have the following attributes:
          r, chir_mag, chir_im, chir_re, kweight, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     kweight = _get_kweight(dgroup, None)
 
     if new:
         title = _get_title(dgroup, title=title)
 
-    opts = dict(win=win, show_legend=True, linewidth=3, title=title,
-                zorder=20, xmax=rmax, xlabel=plotlabels.r, new=new,
+    opts = dict(win=win, show_legend=True, title=title,
+                xmax=rmax, xlabel=plotlabels.r, new=new,
                 delay_draw=True, _larch=_larch)
 
     ylabel = plotlabels.chirlab(kweight, show_mag=show_mag,
@@ -596,33 +630,32 @@ def plot_chir(dgroup, show_mag=True, show_real=False, show_imag=False,
     if not hasattr(dgroup, 'r'):
         print("group does not have chi(R) data")
         return
-    #endif
+
     if label is None:
         label = 'chir'
-    #endif
+
     if show_mag:
         _plot(dgroup.r, dgroup.chir_mag+offset, label='%s (mag)' % label, **opts)
         opts['new'] = False
-    #endif
+
     if show_real:
         _plot(dgroup.r, dgroup.chir_re+offset, label='%s (real)' % label, **opts)
         opts['new'] = False
-    #endif
+
     if show_imag:
         _plot(dgroup.r, dgroup.chir_im+offset, label='%s (imag)' % label, **opts)
-    #endif
+
     if show_window and hasattr(dgroup, 'rwin'):
+        zorders = get_zorders(disp)
+        zwin = zorders[0] - 2
         rwin = dgroup.rwin
         if scale_window:
             rwin *= max(dgroup.chir_mag)
-        opts['zorder'] = 15
-        _plot(dgroup.r, rwin+offset, label='window',  **opts)
-    #endif
+        _plot(dgroup.r, rwin+offset, label='window', zorder=zwin, **opts)
 
     if show_mag or show_real or show_imag or show_window:
         redraw(win=win, xmax=rmax, _larch=_larch)
-    #endif
-#enddef
+
 
 def plot_chiq(dgroup, kweight=None, kmax=None, show_chik=False, label=None,
               title=None, new=True, delay_draw=False, offset=0, win=1,
@@ -653,33 +686,38 @@ def plot_chiq(dgroup, kweight=None, kmax=None, show_chik=False, label=None,
      1. The input data group must have the following attributes:
          k, chi, kwin, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     kweight = _get_kweight(dgroup, kweight)
     nk = len(dgroup.k)
     chiq = dgroup.chiq_re[:nk]
-    opts = dict(win=win, show_legend=True, delay_draw=True, linewidth=3, _larch=_larch)
+    opts = dict(win=win, show_legend=True, delay_draw=True, _larch=_larch)
     if label is None:
         label = 'chi(q) (filtered)'
-    #endif
+
     if new:
         title = _get_title(dgroup, title=title)
 
     _plot(dgroup.k, chiq+offset, xlabel=plotlabels.k,
          ylabel=plotlabels.chikw.format(kweight), title=title,
-         label=label, zorder=20, new=new, xmax=kmax, **opts)
+         label=label, new=new, xmax=kmax, **opts)
 
+    zorders = get_zorders(display=disp)
     if show_chik:
+        zchik = zorders[0] - 2
         chik = dgroup.chi * dgroup.k ** kweight
-        _plot(dgroup.k, chik+offset, zorder=16, label='chi(k)',  **opts)
-    #endif
+        _plot(dgroup.k, chik+offset, zorder=zchik, label='chi(k)',  **opts)
+
     if show_window and hasattr(dgroup, 'kwin'):
+        zwin = zorders[0] - 3
         kwin = dgroup.kwin
         if scale_window:
             kwin = kwin*max(abs(chiq))
-        _plot(dgroup.k, kwin+offset, zorder=12, label='window',  **opts)
-    #endif
+        _plot(dgroup.k, kwin+offset, zorder=zwin, label='window',  **opts)
 
     redraw(win=win, xmax=kmax, _larch=_larch)
-#enddef
 
 
 def plot_wavelet(dgroup, show_mag=True, show_real=False, show_imag=False,
@@ -707,6 +745,10 @@ def plot_wavelet(dgroup, show_mag=True, show_real=False, show_imag=False,
     -----
      The wavelet will be performed
     """
+    disp = get_display(win=win, image=True, _larch=_larch)
+    if disp is None:
+        return
+
     kweight = _get_kweight(dgroup, kweight)
     cauchy_wavelet(dgroup, kweight=kweight, rmax_out=rmax)
     title = _get_title(dgroup, title=title)
@@ -720,8 +762,6 @@ def plot_wavelet(dgroup, show_mag=True, show_real=False, show_imag=False,
         _imshow(dgroup.wcauchy_real, **opts)
     elif show_imag:
         _imshow(dgroup.wcauchy_imag, **opts)
-    #endif
-#enddef
 
 def plot_chifit(dataset, kmin=0, kmax=None, kweight=None, rmax=None,
                 show_mag=True, show_real=False, show_imag=False,
@@ -754,9 +794,13 @@ def plot_chifit(dataset, kmin=0, kmax=None, kweight=None, rmax=None,
      win          integer plot window to use [1]
 
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if kweight is None:
         kweight = dataset.transform.kweight
-    #endif
+
     if isinstance(kweight, (list, tuple, ndarray)):
         kweight=kweight[0]
 
@@ -771,8 +815,7 @@ def plot_chifit(dataset, kmin=0, kmax=None, kweight=None, rmax=None,
     data_chik  = dat.chi * dat.k**kweight
     model_chik = mod.chi * mod.k**kweight
 
-    opts=dict(labelfontsize=10, legendfontsize=10, linewidth=3,
-              show_legend=True, delay_draw=True, win=win, title=title,
+    opts=dict(show_legend=True, delay_draw=True, win=win, title=title,
               _larch=_larch)
 
     # k-weighted chi(k) in first plot window
@@ -784,7 +827,6 @@ def plot_chifit(dataset, kmin=0, kmax=None, kweight=None, rmax=None,
     if show_bkg and hasattr(dat, 'bkgk'):
         _plot(dat.k, dat.bkgk*dat.k**kweight,
               label='refined bkg', **opts)
-    #endif
 
     redraw(win=win, xmin=kmin, xmax=kmax, _larch=_larch)
 
@@ -800,21 +842,20 @@ def plot_chifit(dataset, kmin=0, kmax=None, kweight=None, rmax=None,
         _plot(dat.r, dat.chir_mag+offset, label='|data|', **opts)
         opts['new'] = False
         _plot(mod.r, mod.chir_mag+offset,  label='|fit|', **opts)
-    #endif
+
     if show_real:
         _plot(dat.r, dat.chir_re+offset, label='Re[data]', **opts)
         opts['new'] = False
         _plot(mod.r, mod.chir_re+offset, label='Re[fit]',  **opts)
-    #endif
+
     if show_imag:
         _plot(dat.r, dat.chir_im+offset, label='Im[data]', **opts)
         opts['new'] = False
         _plot(mod.r, mod.chir_im+offset, label='Im[fit]',  **opts)
-    #endif
+
     if show_mag or show_real or show_imag:
         redraw(win=opts['win'], xmax=opts['xmax'], _larch=_larch)
-    #endif
-#enddef
+
 
 def plot_path_k(dataset, ipath=0, kmin=0, kmax=None, offset=0, label=None,
                 new=False, delay_draw=False, win=1, _larch=None, **kws):
@@ -837,6 +878,9 @@ def plot_path_k(dataset, ipath=0, kmin=0, kmax=None, offset=0, label=None,
      win          integer plot window to use [1]
      kws          additional keyword arguments are passed to plot()
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     kweight = dataset.transform.kweight
     path = dataset.pathlist[ipath]
     if label is None:
@@ -849,7 +893,7 @@ def plot_path_k(dataset, ipath=0, kmin=0, kmax=None, offset=0, label=None,
          win=win, new=new, delay_draw=delay_draw, _larch=_larch, **kws)
     if delay_draw:
         redraw(win=win, xmin=kmin, xmax=kmax, _larch=_larch)
-#enddef
+
 
 def plot_path_r(dataset, ipath, rmax=None, offset=0, label=None,
                 show_mag=True, show_real=False, show_imag=True,
@@ -877,10 +921,13 @@ def plot_path_r(dataset, ipath, rmax=None, offset=0, label=None,
      win          integer plot window to use [1]
      kws          additional keyword arguments are passed to plot()
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     path = dataset.pathlist[ipath]
     if label is None:
         label = 'path %i' % (1+ipath)
-    #endif
+
     kweight =dataset.transform.kweight
     ylabel = plotlabels.chirlab(kweight, show_mag=show_mag,
                                 show_real=show_real, show_imag=show_imag)
@@ -892,17 +939,13 @@ def plot_path_r(dataset, ipath, rmax=None, offset=0, label=None,
     if show_mag:
         _plot(path.r,  offset+path.chir_mag, label=label, **opts)
         opts['new'] = False
-    #endif
     if show_real:
         _plot(path.r,  offset+path.chir_re, label=label, **opts)
         opts['new'] = False
-    #endif
     if show_imag:
         _plot(path.r,  offset+path.chir_im, label=label, **opts)
         opts['new'] = False
-    #endif
     redraw(win=win, xmax=rmax, _larch=_larch)
-#enddef
 
 def plot_paths_k(dataset, offset=-1, kmin=0, kmax=None, title=None,
                  new=True, delay_draw=False, win=1, _larch=None, **kws):
@@ -924,6 +967,10 @@ def plot_paths_k(dataset, offset=-1, kmin=0, kmax=None, title=None,
      delay_draw   bool whether to delay draw until more traces are added [False]
      kws          additional keyword arguments are passed to plot()
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     # make k-weighted chi(k)
     kweight = dataset.transform.kweight
     model = dataset.model
@@ -941,9 +988,8 @@ def plot_paths_k(dataset, offset=-1, kmin=0, kmax=None, title=None,
         plot_path_k(dataset, ipath, offset=(ipath+1)*offset,
                     kmin=kmin, kmax=kmax, new=False, delay_draw=True,
                     win=win, _larch=_larch)
-    #endfor
     redraw(win=win, xmin=kmin, xmax=kmax, _larch=_larch)
-#enddef
+
 
 def plot_paths_r(dataset, offset=-0.25, rmax=None, show_mag=True,
                  show_real=False, show_imag=False, title=None, new=True,
@@ -968,6 +1014,10 @@ def plot_paths_r(dataset, offset=-0.25, rmax=None, show_mag=True,
      win          integer plot window to use [1]
      kws          additional keyword arguments are passed to plot()
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     kweight = dataset.transform.kweight
     model = dataset.model
 
@@ -980,44 +1030,46 @@ def plot_paths_r(dataset, offset=-0.25, rmax=None, show_mag=True,
     if show_mag:
         _plot(model.r,  model.chir_mag, label='|sum|', **opts)
         opts['new'] = False
-    #endif
     if show_real:
         _plot(model.r,  model.chir_re, label='Re[sum]', **opts)
         opts['new'] = False
-    #endif
     if show_imag:
         _plot(model.r,  model.chir_im, label='Im[sum]', **opts)
         opts['new'] = False
-    #endif
 
     for ipath in range(len(dataset.pathlist)):
         plot_path_r(dataset, ipath, offset=(ipath+1)*offset,
                     show_mag=show_mag, show_real=show_real,
                     show_imag=show_imag, **opts)
-    #endfor
     redraw(win=win, xmax=rmax,_larch=_larch)
-#enddef
 
 
-def extend_plotrange(x, y, xmin=None, xmax=None, extend=0.10):
+def extend_plotrange(x, y, e0=0, xmin=None, xmax=None, extend=0.10):
     """return plot limits to extend a plot range for x, y pairs"""
     xeps = min(diff(x)) / 5.
     if xmin is None:
         xmin = min(x)
+    else:
+        if xmin < min(x) and e0 > min(x):
+            xmin = xmin + e0
+        if xmin < min(x):
+            xmin = min(x)
     if xmax is None:
         xmax = max(x)
-
-    xmin = max(min(x), xmin-5)
-    xmax = min(max(x), xmax+5)
+    else:
+        if xmax < min(x) and e0 > min(x):
+            xmax = xmax + e0
+        if xmax > max(x):
+            xmax = max(x)
+    xmax = min(max(x), xmax)
 
     i0 = index_of(x, xmin + xeps)
-    i1 = index_of(x, xmax + xeps) + 1
+    i1 = index_nearest(x, xmax + xeps) + 1
 
     xspan = x[i0:i1]
     xrange = max(xspan) - min(xspan)
     yspan = y[i0:i1]
     yrange = max(yspan) - min(yspan)
-
     return  (min(xspan) - extend * xrange,
              max(xspan) + extend * xrange,
              min(yspan) - extend * yrange,
@@ -1029,23 +1081,25 @@ def plot_prepeaks_baseline(dgroup, subtract_baseline=False, show_fitrange=True,
 
     dgroup must have a 'prepeaks' attribute
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if not hasattr(dgroup, 'prepeaks'):
         raise ValueError('Group needs prepeaks')
-    #endif
+
     ppeak = dgroup.prepeaks
+    e0 = dgroup.e0
 
     yplot = getattr(dgroup, 'yplot', getattr(dgroup, 'ydat', None))
-    xplot = getattr(dgroup, 'xplot', getattr(dgroup, 'x', None))
-
-    px0, px1, py0, py1 = extend_plotrange(xplot, yplot,
+    xplot = getattr(dgroup, 'xplot', getattr(dgroup, 'xdat', None))
+    px0, px1, py0, py1 = extend_plotrange(xplot, yplot, e0=e0,
                                           xmin=ppeak.emin, xmax=ppeak.emax)
-
     title = "pre_edge baseline\n %s" % dgroup.filename
 
     popts = dict(xmin=px0, xmax=px1, ymin=py0, ymax=py1, title=title,
                  xlabel='Energy (eV)', ylabel='mu (normalized)', delay_draw=True,
-                 show_legend=True, style='solid', linewidth=3,
-                 label='data', new=True,
+                 show_legend=True,   label='data', new=True,
                  marker='None', markersize=4, win=win, _larch=_larch)
     popts.update(kws)
 
@@ -1071,7 +1125,7 @@ def plot_prepeaks_baseline(dgroup, subtract_baseline=False, show_fitrange=True,
     if show_peakrange:
         for x in (ppeak.elo, ppeak.ehi):
             _plot_axvline(x, color='#DDDDDD', **popts)
-            y = yplot[index_of(xplot, x)]
+            y = yplot[index_nearest(xplot, x)]
             _plot_marker(x, y, color='#DDDDDD', marker='o', size=5, **popts)
 
     redraw(win=win, xmin=px0, xmax=px1, ymin=py0, ymax=py1,
@@ -1083,9 +1137,13 @@ def plot_prepeaks_fit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
 
     dgroup must have a 'peakfit_history' attribute
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if not hasattr(dgroup, 'prepeaks'):
         raise ValueError('Group needs prepeaks')
-    #endif
+
     if show_init:
         result = pkfit = dgroup.prepeaks
     else:
@@ -1094,11 +1152,9 @@ def plot_prepeaks_fit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
             nfit = 0
         pkfit = hist[nfit]
         result = pkfit.result
-    #endif
 
     if pkfit is None:
         raise ValueError('Group needs prepeaks.fit_history or init_fit')
-    #endif
 
     opts = pkfit.user_options
     xplot = 1.0*pkfit.energy
@@ -1121,11 +1177,11 @@ def plot_prepeaks_fit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
         for label, ycomp in ycomps.items():
             if label in opts['bkg_components']:
                 baseline += ycomp
-
-    plotopts = dict(title='%s:\npre-edge peak' % dgroup.filename,
+    label = getattr(pkfit, 'label', '')
+    plotopts = dict(title=f'{dgroup.filename}\npre-edge peak: {label}',
                     xlabel='Energy (eV)', ylabel=opts['array_desc'],
                     delay_draw=True, show_legend=True, style='solid',
-                    linewidth=3, marker='None', markersize=4)
+                    marker='no symbol')
 
     if subtract_baseline:
         yplot -= baseline
@@ -1134,11 +1190,11 @@ def plot_prepeaks_fit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
         xplot_full = 1.0*xplot
         plotopts['ylabel'] = '%s-baseline' % plotopts['ylabel']
 
-    dx0, dx1, dy0, dy1 = extend_plotrange(xplot_full, yplot_full,
+    dx0, dx1, dy0, dy1 = extend_plotrange(xplot_full, yplot_full, e0=dgroup.e0,
                                           xmin=opts['emin'], xmax=opts['emax'])
-    _1, _2, fy0, fy1 = extend_plotrange(xplot, yfit,
+    _1, _2, fy0, fy1 = extend_plotrange(xplot, yfit, e0=dgroup.e0,
                                           xmin=opts['emin'], xmax=opts['emax'])
-
+    # print("PREPEAKS RANGE ", dx0, dx1, dy0, dy1, fy0, fy1)
     ncolor = 0
     popts = {'win': win, '_larch': _larch}
     plotopts.update(popts)
@@ -1152,7 +1208,7 @@ def plot_prepeaks_fit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
         dymin -= 0.05 * (dymax - dymin)
     else:
         _plot(xplot_full, yplot_full, new=True, label='data',
-              color=LineColors[0], **plotopts)
+        color=LineColors[0], **plotopts)
         _oplot(xplot, yfit, label=ylabel, color=LineColors[1], **plotopts)
         ncolor = 1
 
@@ -1210,11 +1266,13 @@ def plot_pca_components(result, min_variance=1.e-5, win=1, _larch=None, **kws):
     popts = dict(xmin=result.xmin, xmax=result.xmax, title=title,
                  xlabel=plotlabels.energy, ylabel=plotlabels.norm,
                  delay_draw=True, show_legend=True, style='solid',
-                 linewidth=3, new=True, marker='None', markersize=4,
-                 win=win, _larch=_larch)
+                 new=True, marker='no symbol', win=win, _larch=_larch)
 
     popts.update(kws)
 
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
 
     _plot(result.x, result.mean, label='Mean', **popts)
     for i, comp in enumerate(result.components):
@@ -1229,17 +1287,19 @@ def plot_pca_weights(result, win=1, _larch=None, **kws):
 
     result must be output of `pca_train`
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     max_comps = len(result.components)
 
     title = "PCA Variances (SCREE) and Indicator Values"
 
-    popts = dict(title=title, xlabel='Component #', zorder=10,
+    popts = dict(title=title, xlabel='Component #',
                  xmax=max_comps+1.5, xmin=0.25, ymax=1, ylabel='variance',
                  style='solid', ylog_scale=True, show_legend=True,
-                 linewidth=1, new=True, marker='o', win=win, _larch=_larch)
+                 new=True, marker='o', win=win, _larch=_larch)
 
     popts.update(kws)
-
     ncomps = max(1, int(result.nsig))
     x = 1 + arange(ncomps)
     y = result.variances[:ncomps]
@@ -1248,15 +1308,20 @@ def plot_pca_weights(result, win=1, _larch=None, **kws):
     xe = 1 + arange(ncomps-1, max_comps)
     ye = result.variances[ncomps-1:ncomps+max_comps]
 
-    popts.update(dict(new=False, zorder=5, style='short dashed',
+    zorders = get_zorders(disp)
+    zvar = zorders[-1] - 2
+
+    popts.update(dict(new=False, zorder=zvar, style='short dashed',
                       color='#B34050', ymin=2e-3*result.variances[ncomps-1]))
     _plot(xe, ye, label='not significant', **popts)
 
     xi = 1 + arange(len(result.ind)-1)
 
-    _plot(xi, result.ind[1:], zorder=15, y2label='Indicator Value',
+    zorders = get_zorders(disp)
+    zind = zorders[-1] + 2
+    _plot(xi, result.ind[1:], zorder=zind, y2label='Indicator Value',
           label='IND', style='solid', win=win, show_legend=True,
-          linewidth=1, marker='o', side='right', _larch=_larch)
+          marker='o', side='right', _larch=_larch)
 
 
 
@@ -1265,7 +1330,9 @@ def plot_pca_fit(dgroup, win=1, with_components=False, _larch=None, **kws):
 
     result must be output of `pca_fit`
     """
-
+    disp = get_display(win=win, stacked=True, _larch=_larch)
+    if disp is None:
+        return
     title = "PCA fit: %s" % (dgroup.filename)
     result = dgroup.pca_result
     model = result.pca_model
@@ -1273,7 +1340,7 @@ def plot_pca_fit(dgroup, win=1, with_components=False, _larch=None, **kws):
     popts = dict(xmin=model.xmin, xmax=model.xmax, title=title,
                  xlabel=plotlabels.energy, ylabel=plotlabels.norm,
                  delay_draw=True, show_legend=True, style='solid',
-                 linewidth=3, new=True, marker='None', markersize=4,
+                 new=True, marker='no symbol',
                  stacked=True, win=win, _larch=_larch)
     popts.update(kws)
     yplot = getattr(result, 'yplot', getattr(result, 'ydat', None))
@@ -1283,7 +1350,6 @@ def plot_pca_fit(dgroup, win=1, with_components=False, _larch=None, **kws):
     _fitplot(result.x, yplot, result.yfit,
              label='data', label2='PCA fit', **popts)
 
-    disp = get_display(win=win, stacked=True, _larch=_larch)
     if with_components and disp is not None:
         disp.panel.oplot(result.x, model.mean, label='mean')
         for n in range(len(result.weights)):
@@ -1318,6 +1384,10 @@ def plot_diffkk(dgroup, emin=None, emax=None, new=True, label=None,
      1. The input data group must have the following attributes:
          energy, mu, bkg, norm, e0, pre_edge, edge_step, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
+
     if hasattr(dgroup, 'f2'):
         f2 = dgroup.f2
     else:
@@ -1329,18 +1399,18 @@ def plot_diffkk(dgroup, emin=None, emax=None, new=True, label=None,
 
     labels = {'f2': r"$f_2(E)$", 'fpp': r"$f''(E)$", 'fp': r"$f'(E)$", 'f1': r"$f_1(E)$"}
 
-    opts = dict(win=win, show_legend=True, linewidth=3,
-                delay_draw=True, _larch=_larch)
+    opts = dict(win=win, show_legend=True, delay_draw=True, _larch=_larch)
 
     _plot(dgroup.energy, f2, xlabel=plotlabels.energy, ylabel=ylabel,
-          title=title, label=labels['f2'], zorder=20, new=new, xmin=emin, xmax=emax,
-          **opts)
-    zorder = 15
+          title=title, label=labels['f2'], new=new, xmin=emin, xmax=emax, **opts)
+
+    zorders = get_zorders(disp)
+    zval = zorders[-1] - 2
     for attr in ('fpp', 'f1', 'fp'):
         yval = getattr(dgroup, attr)
         if yval is not None:
-            _plot(dgroup.energy, yval, zorder=zorder, label=labels[attr], **opts)
-            zorder = zorder - 3
+            _plot(dgroup.energy, yval, zorder=zval, label=labels[attr], **opts)
+            zval = zval - 2
 
     redraw(win=win, xmin=emin, xmax=emax, _larch=_larch)
 #enddef
@@ -1366,6 +1436,9 @@ def plot_feffdat(feffpath, with_phase=True, title=None,
      1. The input data group must have the following attributes:
          energy, mu, bkg, norm, e0, pre_edge, edge_step, filename
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     if hasattr(feffpath, '_feffdat'):
         fdat = feffpath._feffdat
     else:
@@ -1373,26 +1446,29 @@ def plot_feffdat(feffpath, with_phase=True, title=None,
     #endif
 
     _plot(fdat.k, fdat.mag_feff, xlabel=plotlabels.k,
-          ylabel='|F(k)|', title=title, label='magnitude', zorder=20,
+          ylabel='|F(k)|', title=title, label='magnitude',
           new=new, win=win, show_legend=True,
-          delay_draw=delay_draw, linewidth=3, _larch=_larch)
+          delay_draw=delay_draw, _larch=_larch)
 
     if with_phase:
+        zorders = get_zorders(disp)
+        zval = zorders[-1] - 2
         _plot(fdat.k, fdat.pha_feff, xlabel=plotlabels.k,
               y2label='Phase(k)', title=title, label='phase', side='right',
-              zorder=10, new=False, win=win, show_legend=True,
-              delay_draw=delay_draw, linewidth=3, _larch=_larch)
-    #endif
+              zorder=zval, new=False, win=win, show_legend=True,
+              delay_draw=delay_draw, _larch=_larch)
 
     if delay_draw:
         redraw(win=win, _larch=_larch)
-#enddef
 
 def plot_curvefit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
                       show_residual=False, win=1, _larch=None):
     """plot curvefit fit
     dgroup must have a 'curvefit_history' attribute
     """
+    disp = get_display(win=win, _larch=_larch)
+    if disp is None:
+        return
     if not hasattr(dgroup, 'curvefit'):
         raise ValueError('Group needs curvefit group')
     #endif
@@ -1437,17 +1513,16 @@ def plot_curvefit(dgroup, nfit=0, show_init=False, subtract_baseline=False,
 
     plotopts = dict(title='%s:\ncurvefit' % dgroup.filename,
                     xlabel='x', ylabel=opts['array_desc'],
-                    delay_draw=True, show_legend=True, style='solid',
-                    linewidth=3, marker='None', markersize=4)
+                    delay_draw=True, show_legend=True)
 
     if subtract_baseline:
         yplot-= baseline
         yfit -= baseline
         plotopts['ylabel'] = '%s-baseline' % plotopts['ylabel']
 
-    dx0, dx1, dy0, dy1 = extend_plotrange(xplot_full, yplot_full,
+    dx0, dx1, dy0, dy1 = extend_plotrange(xplot_full, yplot_full, e0=dgroup.e0,
                                           xmin=opts['xmin'], xmax=opts['xmax'])
-    _1, _2, fy0, fy1 = extend_plotrange(xplot, yfit,
+    _1, _2, fy0, fy1 = extend_plotrange(xplot, yfit, e0=dgroup.e0,
                                           xmin=opts['xmin'], xmax=opts['xmax'])
 
     ncolor = 0

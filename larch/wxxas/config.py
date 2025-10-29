@@ -10,6 +10,7 @@ ATSYMS = ['?'] + ATOM_SYMS[:98]
 EDGES  = ['K', 'L3', 'L2', 'L1', 'M5', 'M4', 'M3', 'N7']
 OLDCONF_FILE = 'xas_viewer.conf'
 CONF_FILE = 'larix.conf'
+SESSION_LOCK = 'sessionlock'
 
 wxmplot.config.Themes['fivethirtyeight'].update({'legend.fontsize': 10,
                                                  'xtick.labelsize': 9,
@@ -67,7 +68,7 @@ def make_array_choice(opts):
 
 Linear_ArrayChoices = make_array_choice(['norm', 'flat', 'dmude', 'chi0', 'chi1', 'chi2', 'chi3'])
 PrePeak_ArrayChoices = make_array_choice(['norm', 'flat', 'deconv', 'mu'])
-CurveFit_ArrayChoices = make_array_choice(['ydat', 'ynorm', 'dydx'])
+CurveFit_ArrayChoices = make_array_choice(['ydat', 'ynorm', 'norm', 'flat', 'dydx', 'dmude'])
 
 YERR_CHOICES = ('Constant', 'Sqrt(Y)', 'Array')
 XRANGE_CHOICES = ('Full X Range', 'Set X Limits')
@@ -177,12 +178,14 @@ class CVar:
 ##
 ## sections
 ##
-CONF_SECTIONS = {k:v.desc for k, v in LARIX_PANELS.items()}
-CONF_SECTIONS.update({'main': 'Main program configuration',
-                      'pin': 'Pin icon to select points from plots',
-                      'plot': 'General Plotting',
-                      'autosave': 'Automatic saving of Session files',
-                      })
+CONF_SECTIONS = {'main': 'Main program configuration',
+
+                 'plot': 'Plotting configuration',
+                 'pin': 'Pin icon to select points from plots',
+                 'autosave': 'Automatic saving of Session files',
+                 }
+CONF_SECTIONS.update({k:v.desc for k, v in LARIX_PANELS.items()})
+
 
 main = [CVar('chdir_on_fileopen', True, 'bool', desc='whether to change working directory when opening a file'),
         CVar('workdir', get_homedir(), 'path', desc='starting working directory'),
@@ -203,16 +206,16 @@ pin = [CVar('style', 'pin first', 'choice', choices=['pin first', 'plot first'],
            desc='maximum time (seconds) after clicking on the pin to click on plot.\nWill report last saved value')]
 
 
-
-plot = [CVar('theme', '<Auto>', 'choice', choices=PLOT_THEMES,
-            desc='plotting theme for colors and "look and feel"'),
-        CVar('height', 550, 'int', min=100, desc='height of main plot window (in pixels)'),
-        CVar('width', 600, 'int', min=100, desc='width of main plot window (in pixels)'),
-        CVar('linewidth', 3.0, 'float', min=0, step=0.5, desc='line width for each trace (in pixels)'),
-        CVar('markersize', 4.0, 'float', min=0, step=0.5, desc='size of plot markers (in pixels)'),
-        CVar('show_grid', True, 'bool', desc='whether to show grid lines'),
-        CVar('show_fullbox', True, 'bool', desc='whether to show a full box around plot,\nor only left and bottom axes'),
-        ]
+#
+# plot = [CVar('theme', '<Auto>', 'choice', choices=PLOT_THEMES,
+#             desc='plotting theme for colors and "look and feel"'),
+#         CVar('height', 550, 'int', min=100, desc='height of main plot window (in pixels)'),
+#         CVar('width', 600, 'int', min=100, desc='width of main plot window (in pixels)'),
+#         CVar('linewidth', 3.0, 'float', min=0, step=0.5, desc='line width for each trace (in pixels)'),
+#         CVar('markersize', 4.0, 'float', min=0, step=0.5, desc='size of plot markers (in pixels)'),
+#         CVar('show_grid', True, 'bool', desc='whether to show grid lines'),
+#         CVar('show_fullbox', True, 'bool', desc='whether to show a full box around plot,\nor only left and bottom axes'),
+#         ]
 
 
 exafs = [CVar('rbkg', 1.0, 'float', min=0, step=0.1, max=10, desc='R value separating background from EXAFS signal'),
@@ -334,7 +337,7 @@ FULLCONF= {}
 
 _locals = locals()
 
-for section in ('main', 'autosave', 'pin', 'plot', 'xasnorm', 'exafs',
+for section in ('main', 'autosave', 'pin', 'xasnorm', 'exafs',
                 'feffit', 'prepeaks', 'lincombo', 'pca', 'regression',
                 'xydata', 'curvefit'):   # 'xrd1d',
     sname = section

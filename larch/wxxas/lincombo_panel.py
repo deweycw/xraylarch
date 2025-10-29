@@ -435,6 +435,7 @@ class LinComboResultFrame(wx.Frame):
             self.wids['params'].AppendItem(tuple(args))
 
     def onPlotOne(self, evt=None):
+        self.parent.controller.set_datatask_name(self.parent.title)
         self.form = self.mainpanel.read_form()
         self.form['show_fitrange'] = self.wids['show_fitrange'].GetValue()
         self.form['win'] = int(self.wids['plot_win'].GetStringSelection())
@@ -445,6 +446,7 @@ class LinComboResultFrame(wx.Frame):
     def onPlotSel(self, evt=None):
         if self.form is None or self.larch_eval is None:
             return
+        self.parent.controller.set_datatask_name(self.parent.title)
         self.form['show_fitrange'] = self.wids['show_fitrange'].GetValue()
         self.form['win'] = int(self.wids['plot_win'].GetStringSelection())
         form = self.form
@@ -852,7 +854,7 @@ class LinearComboPanel(TaskPanel):
             self.wids["compval_%2.2d" % n].SetValue(weight)
 
 
-    def fill_form(self, dgroup):
+    def fill_form(self, dgroup, newgroup=False):
         """fill in form from a data group"""
         opts = self.get_config(dgroup, with_erange=True)
         self.dgroup = dgroup
@@ -1019,6 +1021,7 @@ lcf_result = {func:s}({gname:s}, [{comps:s}],
         self.skip_process = False
 
     def plot(self, dgroup=None, with_fit=False):
+        self.controller.set_datatask_name(self.title)
         if self.skip_plotting:
             return
 

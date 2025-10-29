@@ -1,3 +1,4 @@
+import os
 import time
 from collections import namedtuple
 from pathlib import Path
@@ -9,9 +10,11 @@ from wxmplot import PlotPanel
 from larch.wxlib import (GridPanel, FloatCtrl, set_color, SimpleText,
                          Choice, Check, Button, HLine, OkCancel, LEFT,
                          pack, plotlabels, ReportFrame, DictFrame,
-                         FileCheckList, Font, FONTSIZE)
-
+                         FileCheckList, get_font, get_plot_config)
+from larch.utils import time_ago
 from larch.utils.physical_constants import DEG2RAD, PLANCK_HC
+
+from .config import SESSION_LOCK
 
 SESSION_PLOTS = {'Normalized \u03BC(E)': 'norm',
                  'Raw \u03BC(E)': 'mu',
@@ -39,7 +42,7 @@ class EnergyUnitsDialog(wx.Dialog):
 
         title = "Select Energy Units to convert to 'eV'"
         wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title)
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
         self.en_units = Choice(panel, choices=self.unit_choices, size=(125, -1),
@@ -141,7 +144,7 @@ class ExportCSVDialog(wx.Dialog):
     def __init__(self, parent, groupnames, **kws):
         title = "Export Selected Groups"
         wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title)
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         self.xchoices = {'Energy': 'energy',
                          'k': 'k',
                          'R': 'r',
@@ -221,7 +224,7 @@ class QuitDialog(wx.Dialog):
     def __init__(self, parent, message, **kws):
         title = "Quit Larch Larix?"
         wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title, size=(500, 150))
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         self.needs_save = True
         panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
@@ -261,7 +264,7 @@ class RenameDialog(wx.Dialog):
     def __init__(self, parent, oldname,  **kws):
         title = "Rename Group %s" % (oldname)
         wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title)
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
         self.newname   = wx.TextCtrl(panel, -1, oldname,  size=(250, -1))
@@ -291,7 +294,7 @@ class RemoveDialog(wx.Dialog):
         title = "Remove %i Selected Group" % len(grouplist)
         self.grouplist = grouplist
         wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title)
-        self.SetFont(Font(FONTSIZE))
+        self.SetFont(get_font())
         panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
 
         panel.Add(SimpleText(panel, 'Remove %i Selected Groups?' % (len(grouplist))),
@@ -310,12 +313,79 @@ class RemoveDialog(wx.Dialog):
             ok = True
         return response(ok, ngroups)
 
+class LockedSessionDialog(wx.Dialog):
+    """dialog for loading Locked / Abandoned Sessions"""
+    def __init__(self, parent, sessionlist,  **kws):
+        title = "Autosaved Larix Sessions"
+
+        wx.Dialog.__init__(self, parent, wx.ID_ANY, title=title, size=(500, 450))
+        self.SetFont(get_font())
+        panel = GridPanel(self, ncols=3, nrows=4, pad=2, itemstyle=LEFT)
+
+        title1 = '    Auto-saved Sessions with open Lock Files: '
+
+        title2 = ' These are auto-saved files from sessions that may have crashed or shut down abruptly.'
+        title3 = ' Or, they might be currently in use by another Larix Process.'
+        title4 = ' You can Import a Session, Delete the lockfile, or Ignore this message.'
+        title5 = ' You can also import auto-saved sessions from the Read Session Files menu'
+
+        panel.Add(SimpleText(panel, title1), dcol=6)
+        panel.Add(SimpleText(panel, title2), dcol=6, newrow=True)
+        panel.Add(SimpleText(panel, title3), dcol=6, newrow=True)
+        panel.Add(SimpleText(panel, title4), dcol=6, newrow=True)
+        panel.Add(SimpleText(panel, title5), dcol=6, newrow=True)
+
+        panel.Add(HLine(panel, size=(500, 3)), dcol=6, newrow=True)
+
+        col_labels = [' Session Label ', 'Last Modified', 'Session Size (MB)', 'Action']
+        sess_opts  = ['Ignore (Session may be in-progress)',
+                     'Import this Session', 'Delete Session Lock file']
+
+        self.wids = {}
+        for i, t in enumerate(col_labels):
+            panel.Add(SimpleText(panel, t), newrow=(i==0))
+
+        self.sessionlist = sessionlist
+        for lockfile, sesspath in sessionlist:
+            stat = os.stat(sesspath)
+            mtime = time_ago(stat.st_mtime)
+            fsize = f"{(stat.st_size/1.e6):.2f}"
+            sess_id = lockfile.replace(SESSION_LOCK, '').replace('.dat', '').replace('_', '')
+
+            panel.Add(SimpleText(panel, sess_id), newrow=True)
+            panel.Add(SimpleText(panel, mtime), newrow=False)
+            panel.Add(SimpleText(panel, fsize), newrow=False)
+            self.wids[lockfile] = Choice(panel, choices=sess_opts, default=0,
+                                             size=(275, -1))
+            panel.Add(self.wids[lockfile], newrow=False)
+
+
+        panel.Add(OkCancel(panel), dcol=2, newrow=True)
+        panel.pack()
+        fit_dialog_window(self, panel)
+
+    def GetResponse(self, ngroups=None):
+        self.Raise()
+        response = namedtuple('LockedSessionResponse', ('ok', 'imp_list','del_list'))
+        ok = False
+        dlist, ilist = [], []
+        sessmap = {lfile: sfile for lfile, sfile in self.sessionlist}
+        if self.ShowModal() == wx.ID_OK:
+            for label, wid in self.wids.items():
+                sel = wid.GetStringSelection().lower()
+                if sel.startswith('dele'):
+                    dlist.append(label)
+                elif sel.startswith('import'):
+                    ilist.append(sessmap[label])
+            ok = True
+        return response(ok, ilist, dlist)
 
 class LoadSessionDialog(wx.Frame):
     """Read, show data from saved larch session"""
 
     xasgroups_name = '_xasgroups'
-    feffgroups_name = ['_feffpaths', '_feffcache']
+    feff_groups = ['_feffpaths', '_feffcache']
+    main_groups = ['_feffit_params', 'curvefit_params']
 
     def __init__(self, parent, session, filename, controller, **kws):
         self.parent = parent
@@ -364,17 +434,17 @@ class LoadSessionDialog(wx.Frame):
         symtable = controller.symtable
 
         self.allgroups = session.symbols.get(self.xasgroups_name, {})
-        self.extra_groups = []
+        self.extra_xasgroups = []
         for key, val in session.symbols.items():
-            if key == self.xasgroups_name or key in self.feffgroups_name:
+            if key == self.xasgroups_name or key in self.feff_groups:
                 continue
             if key in self.allgroups:
                 continue
             if hasattr(val, 'energy') and hasattr(val, 'mu'):
                 if key in self.allgroups.keys() or key in self.allgroups.values():
                     continue
-                self.allgroups[key] = key
-                self.extra_groups.append(key)
+                # self.allgroups[key] = key
+                self.extra_xasgroups.append(key)
 
 
         checked = []
@@ -386,7 +456,7 @@ class LoadSessionDialog(wx.Frame):
 
         group_names = list(self.allgroups.values())
         group_names.append(self.xasgroups_name)
-        group_names.extend(self.feffgroups_name)
+        group_names.extend(self.feff_groups)
 
         wids['view_conf'] = Button(panel, 'Show Session Configuration',
                                      size=(200, 30), action=self.onShowConfig)
@@ -400,19 +470,25 @@ class LoadSessionDialog(wx.Frame):
         panel.Add(wids['view_cmds'], dcol=1, newrow=False)
         panel.Add(HLine(panel, size=(450, 2)), dcol=3, newrow=True)
 
-        over_msg = 'Importing these Groups/Data will overwrite values in the current session:'
-        panel.Add(SimpleText(panel, over_msg), dcol=2, newrow=True)
+        other_msg = 'Other groups and data to import'
+        over_msg = 'Importing these may overwrite values in this session:'
+        panel.Add(SimpleText(panel, other_msg), dcol=3, newrow=True)
+        panel.Add(SimpleText(panel, over_msg), dcol=3, newrow=True)
         panel.Add(SimpleText(panel, "Symbol Name"), dcol=1, newrow=True)
-        panel.Add(SimpleText(panel, "Import/Overwrite?"), dcol=1)
+        panel.Add(SimpleText(panel, "In this Session"), dcol=1)
+        panel.Add(SimpleText(panel, "Import?"), dcol=1)
         i = 0
-        self.overwrite_checkboxes = {}
-        for g in self.session.symbols:
-            if g not in group_names and hasattr(symtable, g):
+        self.other_symbols = {}
+        for gname in sorted(self.session.symbols.keys()):
+            show = ((gname in self.extra_xasgroups) or (gname not in group_names))
+            if show:
+                label = getattr(self.session.symbols[gname], 'filename', gname)
                 chbox = Check(panel, default=True)
-                panel.Add(SimpleText(panel, g),  dcol=1, newrow=True)
+                exists = 'Yes' if hasattr(symtable, gname) else 'No'
+                panel.Add(SimpleText(panel, label),  dcol=1, newrow=True)
+                panel.Add(SimpleText(panel, exists),  dcol=1, newrow=False)
                 panel.Add(chbox,  dcol=1)
-                self.overwrite_checkboxes[g] = chbox
-
+                self.other_symbols[gname] = chbox
                 i += 1
 
         panel.Add((5, 5), newrow=True)
@@ -422,14 +498,12 @@ class LoadSessionDialog(wx.Frame):
         panel.pack()
 
         self.plotpanel = PlotPanel(rightpanel, messenger=self.plot_messages)
+        self.plotpanel.set_config(**get_plot_config())
         self.plotpanel.SetSize((475, 450))
-        plotconf = self.controller.get_config('plot')
-        self.plotpanel.conf.set_theme(plotconf['theme'])
-        self.plotpanel.conf.enable_grid(plotconf['show_grid'])
 
         sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(panel, 0, LEFT, 2)
-        sizer.Add(self.plotpanel, 1, LEFT, 2)
+        sizer.Add(self.plotpanel, 1, wx.GROW|wx.ALL|LEFT, 2)
 
         pack(rightpanel, sizer)
 
@@ -479,7 +553,8 @@ class LoadSessionDialog(wx.Frame):
 
         if len(yplot) > 1:
             self.plotpanel.plot(xplot, yplot, xlabel=xlabel,
-                                ylabel=ylabel, title=fname)
+                                ylabel=ylabel, label=fname,
+                                title=fname)
 
 
     def onShowConfig(self, event=None):
@@ -501,31 +576,23 @@ class LoadSessionDialog(wx.Frame):
         self.Destroy()
 
     def onImport(self, event=None):
-        ignore = []
-        for gname, chbox in self.overwrite_checkboxes.items():
-            if not chbox.IsChecked():
-                ignore.append(gname)
+        xas_groups, ignore = [], []
 
-        sel_groups = self.grouplist.GetCheckedStrings()
-        for fname, gname in self.allgroups.items():
-            if fname not in sel_groups:
-                ignore.append(gname)
+        checked = self.grouplist.GetCheckedStrings()
+        for fname in checked:
+            xas_groups.append(fname)
+
+        other_syms = []
+        for gname, chbox in self.other_symbols.items():
+            if chbox.IsChecked():
+                other_syms.append(gname)
 
         fname = Path(self.filename).as_posix()
         if fname.endswith('/'):
             fname = fname[:-1]
-        lcmd = [f"load_session('{fname}'"]
-        if len(ignore) > 0:
-            ignore = repr(ignore)
-            lcmd.append(f", ignore_groups={ignore}")
-        if len(self.extra_groups) > 0:
-            extra = repr(self.extra_groups)
-            lcmd.append(f", include_xasgroups={extra}")
 
-        lcmd = ''.join(lcmd) + ')'
-
-        cmds = ["# Loading Larch Session with ", lcmd, '######']
-
+        cmds = ["# Loading Larch Session: ",
+                f"load_session('{fname}', xasgroups={repr(xas_groups)}, other_syms={repr(other_syms)})"]
         self.controller.larch.eval('\n'.join(cmds))
         last_fname = None
         xasgroups = getattr(self.controller.symtable, self.xasgroups_name, {})

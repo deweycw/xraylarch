@@ -4,23 +4,26 @@ import shutil
 from glob import glob
 from pathlib import Path
 from copy import deepcopy
+from threading import Thread
 
 import numpy as np
 import wx
 import darkdetect
 
-from pyshortcuts import fix_varname, get_cwd
+from pyshortcuts import fix_varname, get_cwd, uname
 import larch
 from larch import Group, Journal, Entry
 from larch.larchlib import read_config, save_config
 from larch.utils import (group2dict, unique_name,
-                         asfloat, get_sessionid, mkdir, unixpath)
-from larch.wxlib.plotter import last_cursor_pos
+                         get_sessionid, get_session_info,
+                         asfloat, mkdir, unixpath)
+from larch.wxlib.plotter import (last_cursor_pos,
+                                 get_panel_plot_config, get_markercolors)
 from larch.wxlib import ExceptionPopup
 from larch.io import save_session
 from larch.site_config import home_dir, user_larchdir
 
-from .config import XASCONF, CONF_FILE,  OLDCONF_FILE
+from .config import XASCONF, CONF_FILE,  OLDCONF_FILE, SESSION_LOCK
 
 
 class XASController():
@@ -34,14 +37,17 @@ class XASController():
         self.groupname = None
         self.plot_erange = None
         self.report_frame = None
+        self.saver_thread = None
         self.recentfiles = []
         self.panels = {}
         self.datagroup_callbacks = {}
+        self.session_filename = None
+        self.session_warn_overwrite = True
+        self.session_name = None
+
         self.larch = _larch
         if _larch is None:
             self.larch = larch.Interpreter()
-        self.larix_folder = Path(user_larchdir, 'larix').as_posix()
-        self.config_file = Path(self.larix_folder, CONF_FILE).as_posix()
         self.init_larch_session()
         self.init_workdir()
 
@@ -51,26 +57,32 @@ class XASController():
 
         config = {}
         config.update(XASCONF)
-        # may migrate old 'xas_viewer' folder to 'larix' folder
-        xasv_folder = Path(user_larchdir, 'xas_viewer')
-        if Path(xasv_folder).exists() and not Path(self.larix_folder).exists():
-            print("Migrating xas_viewer to larix folder")
-            shutil.move(xasv_folder, self.larix_folder)
 
-        if not Path(self.larix_folder).exists():
+        self.larix_folder = Path(user_larchdir, 'larix').absolute()
+
+        # may migrate old 'xas_viewer' folder to 'larix' folder
+        xasv_folder = Path(user_larchdir, 'xas_viewer').absolute()
+
+        if xasv_folder.exists() and not self.larix_folder.exists():
+            print("Migrating xas_viewer to larix folder")
+            shutil.move(xasv_folder.as_posix(), self.larix_folder.as_posix())
+
+        if not self.larix_folder.exists():
             try:
                 mkdir(self.larix_folder)
             except Exception:
                 title = "Cannot create Larix folder"
-                message = [f"Cannot create directory {larix_folder}"]
+                message = [f"Cannot create directory {self.larix_folder}"]
                 ExceptionPopup(self, title, message)
 
         # may migrate old 'xas_viewer.conf' file to 'larix.conf'
-        old_config_file = Path(self.larix_folder, OLDCONF_FILE).as_posix()
-        if Path(old_config_file).exists() and not Path(self.config_file).exists():
-            shutil.move(old_config_file, self.config_file)
+        old_config_file = Path(self.larix_folder, OLDCONF_FILE)
+        if old_config_file.exists() and not self.config_file.exists():
+            shutil.move(old_config_file.as_posix(), self.config_file.as_posix())
 
-        if Path(self.config_file).exists():
+        self.config_file = Path(self.larix_folder, CONF_FILE)
+
+        if self.config_file.exists():
             user_config = read_config(self.config_file)
             if user_config is not None:
                 for sname in config:
@@ -83,8 +95,55 @@ class XASController():
                             config[sname] = val
 
         self.config = self.larch.symtable._sys.larix_config = config
-        self.larch.symtable._sys.wx.plotopts = config['plot']
+
+        self.session_id = get_sessionid(extra=id(self))
+        self.session_lockfile = f"{SESSION_LOCK}_{self.session_id}.dat"
+        self.set_session_name()
+        self.set_datatask_name()
+
+        with open(Path(self.larix_folder, self.session_lockfile), 'w') as fh:
+            fh.write(f"{get_session_info()}\n")
         self.clean_autosave_sessions()
+
+    def set_session_name(self, name=None, warn_overwrite=True):
+        if name not in ('', None):
+            name = fix_varname(Path(name).stem)
+            self.session_filename = f"{name}.larix"
+            self.session_warn_overwrite = warn_overwrite
+            self.session_name = name
+            self.larch.symtable._sys.session_name = name
+            self.wxparent.SetTitle(f"Larix [{name}]")
+            menulab = f"&Save Larch Session [{name}.larix]\tCtrl+S"
+            self.wxparent.save_session_menu.SetItemLabel(menulab)
+
+
+    def set_datatask_name(self, name='task'):
+        self.larch.symtable._sys.datatask_name = name
+
+    def delete_lockfile(self):
+        spath = Path(self.larix_folder, self.session_lockfile)
+        if spath.exists():
+            os.unlink(spath)
+
+    def get_otherlockfiles(self):
+        """return lock files not matching the current session"""
+        this_session_info = get_session_info()
+        lock_files = {}
+
+        conf = self.get_config('autosave', {})
+        autosave_fileroot = conf.get('fileroot', 'autosave')
+
+        for fname in os.listdir(self.larix_folder):
+            if fname.startswith(SESSION_LOCK) and self.session_id not in fname:
+                sid = fname.replace(SESSION_LOCK, '').replace('_', '').replace('.dat','')
+                asave = f"{autosave_fileroot:s}_{sid}.larix"
+                asave = Path(self.larix_folder, asave)
+                if asave.exists():
+                    with open(Path(self.larix_folder, fname), 'r') as fh:
+                        textlines = fh.readlines()
+                    macid, pid = textlines[0].split()
+                    lock_files[fname] = (asave, macid, pid)
+        return lock_files
 
     def install_group(self, groupname, filename, source=None, journal=None):
         """add groupname / filename to list of available data groups"""
@@ -143,7 +202,9 @@ class XASController():
 
         datatype = getattr(thisgroup, 'datatype', 'xydata')
         if datatype == 'xas':
-            cmds.append(f"{groupname:s}.energy_orig = {groupname:s}.energy[:]")
+            en_orig = getattr(thisgroup, 'energy_orig', None)
+            if en_orig is None:
+                cmds.append(f"{groupname:s}.energy_orig = {groupname:s}.energy[:]")
             array_labels = getattr(thisgroup, 'array_labels', [])
             if len(array_labels) > 2  and getattr(thisgroup, 'data', None) is not None:
                 for i0name in ('i0', 'i_0', 'monitor'):
@@ -188,21 +249,9 @@ class XASController():
                      'regression', 'xasnorm'):
             setattr(dgroup.config, sect, deepcopy(self.config[sect]))
 
-    def get_plot_conf(self):
-        """get basic plot options to pass to plot() ** not window sizes **"""
-        dx = {'linewidth': 3, 'markersize': 4,
-              'show_grid': True, 'show_fullbox': True, 'theme': '<Auto>'}
-        pconf = self.config['plot']
-        out = {}
-        for attr, val in dx.items():
-            out[attr] = pconf.get(attr, val)
-        if out['theme'].startswith('<Au'):
-            out['theme'] = 'dark' if darkdetect.isDark() else 'light'
-        return out
-
     def save_config(self):
         """save configuration"""
-        save_config(self.config_file, self.config)
+        save_config(self.config_file, self.config, form='yaml')
 
     def chdir_on_fileopen(self):
         return self.config['main']['chdir_on_fileopen']
@@ -222,7 +271,7 @@ class XASController():
         rfiles = []
         for tstamp, fname in sorted(self.recentfiles, key=lambda x: x[0], reverse=True)[:10]:
             if fname not in rfiles:
-                buffer.append(f"{tstamp:.1f} {fname:s}")
+                buffer.append(f"{tstamp:.1f} {fname}")
                 rfiles.append(fname)
         buffer.append('')
         buffer = '\n'.join(buffer)
@@ -281,12 +330,20 @@ class XASController():
         for key in missing:
             self.unregister_group_callback(key)
 
-    def autosave_session(self):
+    def autosave_session(self, use_thread=True):
         conf = self.get_config('autosave', {})
         fileroot = conf.get('fileroot', 'autosave')
-        nhistory = max(8, int(conf.get('nhistory', 4)))
+        nhistory = max(12, int(conf.get('nhistory', 2)))
+        if self.saver_thread is not None:
+            i = 0
+            while self.saver_thread.is_alive():
+                i += 1
+                time.sleep(0.1)
+                self.saver_thread.join()
+                if i > 150:
+                    break
 
-        fname =  f"{fileroot:s}_{get_sessionid():s}.larix"
+        fname =  f"{fileroot:s}_{self.session_id}.larix"
         savefile = Path(self.larix_folder, fname).as_posix()
         for i in reversed(range(1, nhistory)):
             curf = savefile.replace('.larix', f'_{i:d}.larix' )
@@ -297,7 +354,14 @@ class XASController():
             curf = savefile.replace('.larix', '_1.larix' )
             shutil.move(savefile, curf)
         self.sync_xasgroups()
-        save_session(savefile, _larch=self.larch)
+        if use_thread:
+            self.saver_thread = Thread(target=save_session, args=(savefile,),
+                                       kwargs={'_larch': self.larch})
+            self.saver_thread.start()
+        else:
+            save_session(savefile, _larch=self.larch)
+        time.sleep(0.25)
+
         return savefile
 
     def clean_autosave_sessions(self):
@@ -339,6 +403,21 @@ class XASController():
                 os.unlink(dfile)
             nremove -= 1
 
+        # remove lockfiles without an autosave session file
+        this_session_info = get_session_info()
+        stale_lock_files = []
+        for fname in os.listdir(self.larix_folder):
+            if fname.startswith(SESSION_LOCK) and self.session_id not in fname:
+                sid = fname.replace(SESSION_LOCK, '').replace('_', '').replace('.dat','')
+                asave = f"{fileroot:s}_{sid}.larix"
+                if not Path(self.larix_folder, asave).exists():
+                    stale_lock_files.append(Path(self.larix_folder, fname))
+        # print("clean stale lock files ", stale_lock_files)
+        for fname in stale_lock_files:
+            os.unlink(fname)
+
+
+
     def get_recentfiles(self, max=10):
         return sorted(self.recentfiles, key=lambda x: x[0], reverse=True)[:max]
 
@@ -361,9 +440,8 @@ class XASController():
         self.init_larch_session()
 
     def save_exafsplot_config(self, options):
-        self.larix_folder = Path(user_larchdir, 'larix').as_posix()
-        plot_conf = Path(user_larchdir, 'larix', 'larix_exafsplots.conf')
-        save_config(plot_conf, options)
+        exconf_path = Path(user_larchdir, 'larix', 'larix_exafsplots.conf')
+        save_config(exconf_path, options, form='yaml')
 
     def load_exafsplot_config(self):
         plot_conf = Path(user_larchdir, 'larix', 'larix_exafsplots.conf')
@@ -383,12 +461,9 @@ class XASController():
     def get_display(self, win=1, stacked=False,
                     size=None, position=None):
         wintitle='Larch XAS Plot Window %i' % win
-
-        conf = self.get_plot_conf()
-        opts = dict(wintitle=wintitle, stacked=stacked,
-                    size=size, position=position, win=win)
-        opts.update(conf)
-        return self.symtable._plotter.get_display(**opts)
+        return self.symtable._plotter.get_display(
+                     wintitle=wintitle, stacked=stacked,
+                     size=size, position=position, win=win)
 
     def set_focus(self, topwin=None):
         """
@@ -456,7 +531,7 @@ class XASController():
     def set_plot_erange(self, erange):
         self.plot_erange = erange
 
-    def copy_group(self, filename, new_filename=None):
+    def copy_group(self, filename, new_groupname=None, new_filename=None):
         """copy XAS group (by filename) to new group"""
         groupname = self.file_groups[filename]
         if not hasattr(self.larch.symtable, groupname):
@@ -465,16 +540,24 @@ class XASController():
         ogroup = self.get_group(groupname)
         ngroup = larch.Group(datatype=ogroup.datatype, copied_from=groupname)
 
+        if new_filename is None:
+            new_filename = filename
+        if new_groupname is None:
+            new_groupname = ogroup.groupname
+
+        ngroup.filename = unique_name(new_filename, self.file_groups.keys())
+        ngroup.groupname = unique_name(new_groupname, self.file_groups.values())
+        # print(f"Copy Group {new_filename=}, {new_groupname=}  {ngroup.filename=} {ngroup.groupname=}")
+
         for attr in dir(ogroup):
             val = getattr(ogroup, attr, None)
-            if val is not None:
+            if attr in ('filename', 'groupname'):
+                continue
+            if isinstance(val, np.ndarray) or val is not None:
                 setattr(ngroup, attr, deepcopy(val))
 
-        if new_filename is None:
-            new_filename = filename + '_1'
-        ngroup.filename = unique_name(new_filename, self.file_groups.keys())
-        ngroup.groupname = unique_name(groupname, self.file_groups.values())
         ngroup.journal.add('source_desc', f"copied from '{filename:s}'")
+
         setattr(self.larch.symtable, ngroup.groupname, ngroup)
         return ngroup
 
@@ -507,7 +590,8 @@ class XASController():
         if plot_yarrays is None and hasattr(dgroup, 'plot_yarrays'):
             plot_yarrays = dgroup.plot_yarrays
 
-        popts = kws
+        popts = get_panel_plot_confing(ppanel)
+        popts = popts.update(kws)
         fname = Path(dgroup.filename).name
         if not 'label' in popts:
             popts['label'] = dgroup.plot_ylabel
@@ -540,16 +624,21 @@ class XASController():
             axes = ppanel.axes
             for etype, x, y, opts in plot_extras:
                 if etype == 'marker':
-                    popts = {'marker': 'o', 'markersize': 4,
+                    col_edge, col_face = get_markercolors(trace=len(plot_yarrays),
+                                                linecolors=popts['linecolors'],
+                                                facecolor=popts['facecolor'])
+                    popts = {'marker': 'o',
+                             'markersize': popts['markersize'],
                              'label': '_nolegend_',
-                             'markerfacecolor': 'red',
-                             'markeredgecolor': '#884444'}
+                             'markerfacecolor': col_face,
+                             'markeredgecolor': col_edge}
                     popts.update(opts)
                     axes.plot([x], [y], **popts)
                 elif etype == 'vline':
                     popts = {'ymin': 0, 'ymax': 1.0,
                              'color': '#888888'}
                     popts.update(opts)
+
                     axes.axvline(x, **popts)
         ppanel.canvas.draw()
         self.set_focus()

@@ -1,9 +1,9 @@
-import json
+import sys
 import time
+import traceback
 import numpy as np
 import uuid, socket, platform
 from collections import namedtuple
-
 from gzip import GzipFile
 
 from lmfit import Parameter, Parameters
@@ -13,10 +13,14 @@ from pyshortcuts import bytes2str, str2bytes, fix_varname, gformat
 from larch import Group, isgroup, __date__, __version__, __release_version__
 from ..utils import read_textfile, unique_name, format_exception, unixpath, isotime
 from ..utils.jsonutils import encode4js, decode4js
+from ..utils import npjson
 
 SessionStore = namedtuple('SessionStore', ('config', 'command_history', 'symbols'))
 
 EMPTY_FEFFCACHE = {'paths': {}, 'runs': {}}
+
+class EmptyValue:
+    pass
 
 def invert_dict(d):
     "invert a dictionary {k: v} -> {v: k}"
@@ -29,6 +33,7 @@ def get_machineid():
 def is_larch_session_file(fname):
     return read_textfile(fname, size=64).startswith('##LARIX:')
 
+
 def save_groups(fname, grouplist):
     """save a list of groups (and other supported datatypes) to file
 
@@ -38,7 +43,7 @@ def save_groups(fname, grouplist):
     """
     buff = ["##LARCH GROUPLIST"]
     for dat in grouplist:
-        buff.append(json.dumps(encode4js(dat)))
+        buff.append(npjson.dumps(encode4js(dat)))
 
     buff.append("")
 
@@ -61,12 +66,12 @@ def read_groups(fname):
     out = []
     for line in lines:
         if len(line) > 1:
-            out.append(decode4js(json.loads(line)))
+            out.append(decode4js(npjson.loads(line)))
     return out
 
 
 def save_session(fname=None, symbols=None, histbuff=None,
-                auto_xasgroups=False, _larch=None):
+                auto_xasgroups=False, _larch=None, verbose=False):
     """save all groups and data into a Larch Save File (.larix)
     A portable compressed json file, that can be loaded with `read_session()`
 
@@ -105,6 +110,8 @@ def save_session(fname=None, symbols=None, histbuff=None,
     if _larch is None:
         raise ValueError('_larch not defined')
     symtab = _larch.symtable
+    if verbose:
+        print(f"#save_session {isotime()}:  {fname}")
 
     buff = ["##LARIX: 1.0      Larch Session File",
             "##Date Saved: %s"   % time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -123,24 +130,33 @@ def save_session(fname=None, symbols=None, histbuff=None,
             ]
 
     core_groups = symtab._sys.core_groups
-    buff.append('##Larch Core Groups: %s' % (json.dumps(core_groups)))
+    buff.append('##Larch Core Groups: %s' % (npjson.dumps(core_groups)))
 
+    if verbose:
+        print(f"#save_session {isotime()}:  core groups encoded")
     config = symtab._sys.config
     for attr in dir(config):
-        buff.append('##Larch %s: %s' % (attr, json.dumps(getattr(config, attr, None))))
+        buff.append('##Larch %s: %s' % (attr, npjson.dumps(getattr(config, attr, None))))
     buff.append("##</CONFIG>")
-
+    if verbose:
+        print(f"#save_session {isotime()}:  config encoded")
 
     if histbuff is None:
         try:
             histbuff = _larch.input.history.get(session_only=True)
         except:
-            histbuff = None
+            histbuff = []
+
+    if verbose:
+        print(f"#save_session {isotime()}:  {_larch=}")
+
 
     if histbuff is not None:
         buff.append("##<Session Commands>")
         buff.extend(["%s" % l for l in histbuff])
         buff.append("##</Session Commands>")
+    if verbose:
+        print(f"#save_session {isotime()}:  history saved {len(histbuff)}")
 
     if symbols is None:
         symbols = []
@@ -148,35 +164,76 @@ def save_session(fname=None, symbols=None, histbuff=None,
             if attr not in core_groups:
                 symbols.append(attr)
     nsyms = len(symbols)
+    if verbose:
+        print(f"#save_session {isotime()}:  will save {nsyms} symbols")
 
-    _xasgroups = None
-    if '_xasgroups' not in symbols and auto_xasgroups:
+    _xasgroups = getattr(symtab, '_xasgroups', None)
+    if _xasgroups is None and auto_xasgroups:
         nsyms +=1
         _xasgroups = {}
         for sname in symbols:
             obj = getattr(symtab, sname, None)
             if isgroup(obj):
                 gname = getattr(obj, 'groupname', None)
-                fname = getattr(obj, 'filename', None)
-                if gname is not None and fname is not None:
-                    _xasgroups[fname] = gname
+                xname = getattr(obj, 'filename', None)
+                if gname is not None and xname is not None:
+                    _xasgroups[xname] = gname
 
     buff.append("##<Symbols: count=%d>"  % len(symbols))
     if _xasgroups is not None:
         buff.append('<:_xasgroups:>')
-        buff.append(json.dumps(encode4js(_xasgroups)))
+        buff.append(npjson.dumps(encode4js(_xasgroups)))
 
+    if verbose:
+        print(f"#save_session {isotime()}:  _xasgroups saved {len(_xasgroups)}")
     for attr in symbols:
-        if attr not in core_groups:
+        if attr not in core_groups and attr != '_xasgroups':
             buff.append(f'<:{attr}:>')
-            buff.append(json.dumps(encode4js(getattr(symtab, attr))))
+            if verbose:
+                print(f"#save_session {isotime()}: saving {attr}")
+            try:
+                dat = encode4js(getattr(symtab, attr))
+            except (TypeError, ValueError) as exc:
+                print(f"Warning: could not encode data for group {attr}")
+                print(f" data attribute: {attr}")
+                tblist = [tb for tb in traceback.extract_tb(sys.exc_info()[2])]
+                print(''.join(traceback.format_list(tblist)))
+            if verbose:
+                print(f"#save_session {isotime()}: encoded {attr}")
+                if isinstance(dat, dict):
+                    print(f"#save_session {isotime()}: keys = {dat.keys()}")
+            try:
+                sval = npjson.dumps(dat, check_circular=True)
+            except TypeError as exc:
+                print(f"Warning: could not write data encoded for {attr}")
+                print(f" data attribute: {attr}")
+                print(" exception : ",  exc)
+                sval = None
+
+            if sval is not None:
+                buff.append(sval)
+            else:
+                if isinstance(dat, dict):
+                    print(f"#save_session {isotime()}: keys = {dat.keys()}")
+                    for dkey, dval in dat.items():
+                        print("Data key ", dkey, dval)
+                        try:
+                            xval = npjosn.dumps(dval, check_circular=True)
+                        except Exception as exc:
+                            print(f"--> error here a attribute: {dkey}")
+                            print("--> exception : ",  exc)
 
     buff.append("##</Symbols>")
     buff.append("")
+    if verbose:
+        print(f"#save_session {isotime()}:  saving to Gzipfile {fname}")
 
     fh = GzipFile(unixpath(fname), "w")
     fh.write(str2bytes("\n".join(buff)))
     fh.close()
+    if verbose:
+        print(f"#save_session {isotime()}: {fname}")
+
 
 def clear_session(_larch=None):
     """clear user-definded data in a session
@@ -213,8 +270,6 @@ def read_session(fname, clean_xasgroups=True):
 
     See Also:
        load_session
-
-
     """
     text = read_textfile(fname)
     lines = text.split('\n')
@@ -244,7 +299,7 @@ def read_session(fname, clean_xasgroups=True):
                 symname = line.replace('<:', '').replace(':>', '')
             else:
                 try:
-                    symbols[symname] = decode4js(json.loads(line))
+                    symbols[symname] = decode4js(npjson.loads(line))
                 except:
                     print(''.join(format_exception()))
                     print("decode failed:: ", symname, repr(line)[:50])
@@ -256,7 +311,7 @@ def read_session(fname, clean_xasgroups=True):
                 val = val.strip()
                 if '[' in val or '{' in val:
                     try:
-                        val = decode4js(json.loads(val))
+                        val = decode4js(npjson.loads(val))
                     except:
                         print(''.join(format_exception()))
                         print("decode failed @## ", repr(val)[:50])
@@ -272,12 +327,16 @@ def read_session(fname, clean_xasgroups=True):
     return SessionStore(config, cmd_history, symbols)
 
 
-def load_session(fname, ignore_groups=None, include_xasgroups=None, _larch=None, verbose=False):
+def load_session(fname, xasgroups=None, other_syms=None, ignore_groups=None,
+                include_xasgroups=None, _larch=None, verbose=False):
     """load all data from a Larch Session File into current larch session,
     merging into existing groups as appropriate (see Notes below)
 
     Arguments:
        fname  (str):  name of session file
+       xasgroups (list of strings): complete list of xas groups to import
+                          (overrides ignore_groups/include_xasgroups)
+       other_syms (list of strings): list of other groups to import
        ignore_groups (list of strings): list of symbols to not import
        include_xasgroups (list of strings): list of symbols to import as XAS spectra,
                            even if not expicitly set in `_xasgroups`
@@ -294,28 +353,39 @@ def load_session(fname, ignore_groups=None, include_xasgroups=None, _larch=None,
         2. to avoid name clashes, group and file names in the `_xasgroups` dictionary
            may be modified on loading
 
+        3. on xasgroups, ignore_groups, include_xasgrooups:
+           if xasgroups is None, the _xasgroups from the Session will be used,
+              with ignore_groups listing groups to ignore, and include_xasgroups listing
+              groups not in _xasgroups, but that should be added.
+           if xasgroups is not None, it will be used, ignoring the _xasgroups from the Session,
+              and ignoring ignore_groups and include_xasgroups.
+        4. if other_syms is not None, those symbols will be imported, but no others.
+           If left None, all other symbols will be imported.
+
     """
-    if _larch is None:
-        raise ValueError('load session needs a larch session')
-
+    # groups to merge into existing session: (_feffpaths, _feffcache, _xasgroups) are pop()ed here
     session = read_session(fname)
+    sess_symbols = session.symbols
+    sess_feffpaths = sess_symbols.pop('_feffpaths', {})
+    sess_feffcache = sess_symbols.pop('_feffcache', EMPTY_FEFFCACHE)
+    sess_xasgroups = sess_symbols.pop('_xasgroups', {})
+    sess_allgroups = list(sess_symbols)
+    sess_xasdat = {}
+    for key, val in sess_symbols.items():
+        if (isgroup(val) and
+                ((hasattr(val, 'energy') and hasattr(val, 'mu')) or
+                 (hasattr(val, 'xdat') and hasattr(val, 'ydat')))):
+            fname = getattr(val, 'filename', None)
+            gname = getattr(val, 'groupname', None)
+            if fname is not None and gname is not None:
+                sess_xasdat[fname] = gname
+                sess_xasdat[gname] = gname
 
-    if ignore_groups is None:
-        ignore_groups = []
-    if include_xasgroups is None:
-        include_xasgroups = []
-
-    # special groups to merge into existing session:
-    #  _feffpaths, _feffcache, _xasgroups
-    s_symbols = session.symbols
-    s_xasgroups = s_symbols.pop('_xasgroups', {})
-
-    s_xasg_inv = invert_dict(s_xasgroups)
-
-    s_feffpaths = s_symbols.pop('_feffpaths', {})
-    s_feffcache = s_symbols.pop('_feffcache', EMPTY_FEFFCACHE)
-
-    symtab = _larch.symtable
+    # current symbol table
+    if _larch is None:
+        symtab = Group(_sys=Group())
+    else:
+        symtab = _larch.symtable
     if not hasattr(symtab, '_xasgroups'):
         symtab._xasgroups = {}
     if not hasattr(symtab, '_feffpaths'):
@@ -330,33 +400,51 @@ def load_session(fname, ignore_groups=None, include_xasgroups=None, _larch=None,
                     'command_history': session.command_history}
     symtab._sys.restored_sessions[fname] = restore_data
 
-    c_xas_gnames = list(symtab._xasgroups.values())
+    # get list of names of xasgroups:
+    if xasgroups is None:
+        xasgroups = list(sess_xasgroups)
+    xasgroup_list = [a for a in xasgroups]
+    if ignore_groups is not None:
+        for name in ignore_groups:
+            if name in xasgroup_list:
+                xasgroup_list.pop(name)
+    if include_xasgroups is not None:
+        for name in include_xasgroups:
+            if name not in xasgroup_list and name in sess_allgroups:
+                xasgroup_list.append(name)
+    # xasgroup_list is now the list of groups, we want to dict of {filename: groupname}
+    _xasgroups = {}
+    for name in xasgroup_list:
+        if name in sess_xasgroups:
+            _xasgroups[name] = sess_xasgroups[name]
+        elif name in sess_xasdat:
+            _xasgroups[name] = sess_xasdat[name]
+        elif name in sess_allgroups:
+            _xasgroups[name] = name
 
-    for sym, val in s_symbols.items():
-        if sym in ignore_groups:
-            if sym in s_xasgroups.values():
-                s_key = s_xasg_inv[sym]
-                s_xasgroups.pop(s_key)
-                s_xasg_inv = invert_dict(s_xasgroups)
+    for sym, gname in _xasgroups.items():
+        obj = sess_symbols.pop(gname, None)
+        if gname is not None:
+            if sym in symtab._xasgroups:
+                sym = unique_name(sym, symtab._xasgroups.keys())
+                obj.filename = sym
+            if getattr(obj, 'groupname', None) is None:
+                obj.groupname = gname
+            if getattr(obj, 'filename', None) is None:
+                obj.filename = sym
+            setattr(symtab, gname, obj)
+            symtab._xasgroups[sym] = gname
 
-            continue
-        if sym in c_xas_gnames or sym in include_xasgroups:
-            newsym = unique_name(sym, c_xas_gnames)
-            if (sym in s_xasgroups.values() or
-                     (hasattr(val, 'energy') and hasattr(val, 'mu'))):
-                c_xas_gnames.append(newsym)
-                s_key = s_xasg_inv.get(sym, getattr(val, 'filename', newsym))
-                s_xasgroups[s_key] = newsym
-                s_xasg_inv = invert_dict(s_xasgroups)
-            sym = newsym
+    if other_syms is None:
+        other_syms = sess_symbols.keys()
 
-        if verbose and hasattr(symtab, sym):
-            print(f"warning overwriting '{sym}'")
-        setattr(symtab, sym, val)
+    for sym in other_syms:
+        obj = getattr(sess_symbols, sym, EmptyValue)
+        if obj is not EmptyValue:
+            setattr(symtab, sym, obj)
 
-    symtab._feffpaths.update(s_feffpaths)
+    symtab._feffpaths.update(sess_feffpaths)
 
-    symtab._xasgroups.update(s_xasgroups)
     missing = []
     for name, group in symtab._xasgroups.items():
         if group not in symtab:
@@ -365,4 +453,6 @@ def load_session(fname, ignore_groups=None, include_xasgroups=None, _larch=None,
         symtab._xasgroups.pop(name)
 
     for name in ('paths', 'runs'):
-        symtab._feffcache[name].update(s_feffcache[name])
+        symtab._feffcache[name].update(sess_feffcache[name])
+
+    return symtab if _larch is None else None

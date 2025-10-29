@@ -15,8 +15,8 @@ from larch import Group
 from larch.wxlib import (BitmapButton, SetTip, GridPanel, FloatCtrl,
                          FloatSpin, FloatSpinWithPin, get_icon, SimpleText,
                          pack, Button, HLine, Choice, Check, MenuItem, Popup,
-                         CEN, LEFT, FRAMESTYLE, Font, FileSave, GUI_COLORS,
-                         FileOpen, FONTSIZE, FONTSIZE_FW, DataTableGrid)
+                         CEN, LEFT, FRAMESTYLE, FileSave, GUI_COLORS,
+                         FileOpen, DataTableGrid, get_font)
 
 from larch.xafs import etok, ktoe
 from larch.utils import group2dict
@@ -210,15 +210,18 @@ class TaskPanel(wx.Panel):
         self.larch = controller.larch
         self.title = 'Generic Panel'
         self.configname = panel
+        if panel in LARIX_PANELS:
+            self.title = LARIX_PANELS[panel].title
+            self.desc  = LARIX_PANELS[panel].desc
 
         self.wids = {}
         self.subframes = {}
         self.command_hist = []
-        self.SetFont(Font(FONTSIZE))
-        self.titleopts = dict(font=Font(FONTSIZE+2),
-                              colour=GUI_COLORS.title_red, style=LEFT)
+        self.SetFont(get_font())
+        self.titleopts = {'font': get_font(larger=1),
+                          'colour': GUI_COLORS.title_red, 'style': LEFT}
 
-        self.font_fixedwidth = wx.Font(FONTSIZE_FW, wx.MODERN, wx.NORMAL, wx.BOLD)
+        self.font_fixedwidth = get_font(fixed_width=True)
 
         self.panel = GridPanel(self, ncols=7, nrows=10, pad=2, itemstyle=LEFT)
         self.panel.sizer.SetVGap(5)
@@ -326,6 +329,7 @@ class TaskPanel(wx.Panel):
 
     def onPanelExposed(self, **kws):
         # called when notebook is selected: process group
+        self.controller.set_datatask_name(self.title)
         fname = self.controller.filelist.GetStringSelection()
         if fname in self.controller.file_groups:
             gname = self.controller.file_groups[fname]
@@ -443,7 +447,7 @@ class TaskPanel(wx.Panel):
         if dgroup is not None:
             setattr(dgroup.config, self.configname, conf)
 
-    def fill_form(self, dat):
+    def fill_form(self, dat, newgroup=False):
         if isinstance(dat, Group):
             dat = group2dict(dat)
 

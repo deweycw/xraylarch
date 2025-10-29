@@ -28,8 +28,8 @@ except (ImportError, AttributeError):
 _larch_name = '_sys.wx'
 _larch_builtins = {}
 
-FONTSIZE = 10
-FONTSIZE_FW = 10
+FONTSIZE = 8
+FONTSIZE_FW = 8
 if uname == 'win':
     FONTSIZE = 10
     FONTSIZE_FW = 11
@@ -37,6 +37,37 @@ if uname == 'win':
 elif uname == 'darwin':
     FONTSIZE = 11
     FONTSIZE_FW = 12
+
+def fontsize(fixed_width=False):
+    """return best default fontsize"""
+    font = wx.SystemSettings.GetFont(wx.SYS_DEFAULT_GUI_FONT)
+    if uname not in ('win', 'darwin'):
+        font = font.Smaller()
+    elif fixed_width:
+        font = font.Larger()
+    return int(font.GetFractionalPointSize())
+
+
+def Font(size, serif=False, fixed_width=False):
+    """define a font by size and serif/ non-serif
+    f = Font(10, serif=True)
+    """
+    family = wx.DEFAULT
+    if not serif:
+        family = wx.SWISS
+    if fixed_width:
+        family = wx.MODERN
+    return wx.Font(size, family, wx.NORMAL, wx.BOLD, 0, "")
+
+def get_font(larger=0, smaller=0, serif=False, fixed_width=False):
+    "return a font"
+    fnt = Font(fontsize(fixed_width=fixed_width),
+               serif=serif, fixed_width=fixed_width)
+    for i in range(larger):
+        fnt = fnt.Larger()
+    for i in range(smaller):
+        fnt = fnt.Smaller()
+    return fnt
 
 
 def DarwinHLine(parent, size=(700, 3)):
@@ -60,7 +91,7 @@ def nullfunc(*args, **kws):
 
 _larch_builtins = {'_sys.wx': dict(gcd=nullfunc,
                                    databrowser=nullfunc,
-                                   filepromspt=nullfunc,
+                                   fileprompt=nullfunc,
                                    wx_update=nullfunc)}
 
 _larch_builtins['_plotter'] = dict(plot=nullfunc,
@@ -88,7 +119,7 @@ _larch_builtins['_plotter'] = dict(plot=nullfunc,
                                    fit_plot=nullfunc)
 
 if HAS_WXPYTHON:
-    from wxutils import (set_sizer, pack, SetTip, Font, HLine, Check,
+    from wxutils import (set_sizer, pack, SetTip, HLine, Check,
                          MenuItem, Popup, RIGHT, LEFT, CEN , LTEXT,
                          FRAMESTYLE, hms, DateTimeCtrl, Button,
                          TextCtrl, ToggleButton, BitmapButton, Choice,
@@ -96,13 +127,14 @@ if HAS_WXPYTHON:
                          HyperText, get_icon, OkCancel,
                          SavedParameterDialog, GridPanel, RowPanel,
                          make_steps, set_float, FloatCtrl,
-                         EditableListBox, FileCheckList,
+                         EditableListBox,
                          FileDropTarget, NumericCombo, FloatSpin,
                          FileOpen, FileSave, SelectWorkdir,
                          FloatSpinWithPin, flatnotebook,
                          PeriodicTablePanel, gcd, ExceptionPopup,
                          show_wxsizes, panel_pack)
 
+    from .filechecklist import FileCheckList
     from .wxcolors import COLORS, GUIColors, GUI_COLORS, set_color
     from . import larchframe
     from . import larchfilling
@@ -125,7 +157,7 @@ if HAS_WXPYTHON:
 
     _larch_builtins = {'_sys.wx': dict(gcd=gcd,
                                        databrowser=databrowser,
-                                       filepromspt=fileprompt,
+                                       fileprompt=fileprompt,
                                        wx_update=wx_update)}
 
     from .plotter import (_plot, _oplot, _newplot, _plot_text, fileplot,
@@ -135,9 +167,10 @@ if HAS_WXPYTHON:
                           get_display, _closeDisplays, _getcursor,
                           last_cursor_pos, _imshow, _contour, _xrf_plot,
                           _xrf_oplot, _fitplot, _redraw_plot,
-                          get_zoomlimits, set_zoomlimits)
-
-
+                          get_zoomlimits, set_zoomlimits,
+                          save_plot_config, get_plot_config,
+                          get_panel_plot_config, set_panel_plot_config,
+                          get_zorders, get_markercolors, set_plotwindow_title)
 
     if uname == 'darwin':
         HLine = DarwinHLine
@@ -148,11 +181,13 @@ if HAS_WXPYTHON:
                                        plot_arrow=_plot_arrow,
                                        plot_setlimits=_plot_setlimits,
                                        plot_axvline=_plot_axvline,
-                                      plot_axhline=_plot_axhline,
+                                       plot_axhline=_plot_axhline,
                                        scatterplot=_scatterplot, hist=_hist,
                                        update_trace=_update_trace,
                                        save_plot=_saveplot,
                                        save_image=_saveimg,
+                                       save_plot_config=save_plot_config,
+                                       get_plot_config=get_plot_config,
                                        get_display=get_display,
                                        close_all_displays=_closeDisplays,
                                        get_cursor=_getcursor,
